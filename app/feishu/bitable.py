@@ -9,11 +9,22 @@ from __future__ import annotations
 
 import logging
 
-from .client import FeishuClient, FeishuError
+from .client import FeishuClient, FeishuConfig, FeishuError
 
 logger = logging.getLogger(__name__)
 
 TASK_NO_FIELD = "任务编号"
+
+
+def bitable_client() -> FeishuClient | None:
+    """建一个只用来写表的客户端。
+
+    写多维表格走的是 REST + tenant_access_token，**不需要事件订阅**，
+    所以即使消息入口用的是 WorkBuddy 的飞书通道（方案 A），
+    也可以单独建一个只管表格权限的应用来写，两边不会抢长连接。
+    """
+    config = FeishuConfig.from_env()
+    return FeishuClient(config) if config.has_bitable else None
 
 
 def _fields_for_task(task) -> dict:

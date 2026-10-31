@@ -21,6 +21,12 @@ from .db import DATA_DIR, UPLOAD_DIR, get_settings, init_db, transaction, utc_no
 from .excel_import import import_excel
 from .feishu.bot import get_bot, start_bot
 from .semantic import is_configured, reindex_properties, search_properties, semantic_status
+from .shots import (
+    ShotError,
+    analyze,
+    frame_path,
+    save_storyboard,
+)
 from .services import (
     create_task_record,
     export_workbench_package,
@@ -471,6 +477,79 @@ def discard_clip(clip_id: str):
     if not drop_clip(clip_id):
         raise HTTPException(404, "视频不存在")
     return {"dropped": True, "clip_id": clip_id}
+
+
+# ------------------------------------------------------------------ 分镜
+# 抽帧交给人/模型看图，再按「一镜一句」回填，最后合成工作台要的文案。
+
+class StoryboardShot(BaseModel):
+    index: int = Field(ge=1, le=200)
+    label: str = Field(default="", max_length=40)
+    text: str = Field(default="", max_length=200)
+
+
+class StoryboardPayload(BaseModel):
+    shots: list[StoryboardShot]
+
+
+@app.post("/api/tasks/{task_id}/analyze")
+def analyze_task_shots(task_id: str, segment_seconds: float = Query(default=0, ge=0, le=60), force: bool = False):
+    row = get_task(task_id)
+    if row is None:
+        raise HTTPException(404, "任务不存在")
+    if not row["source_video_path"]:
+        raise HTTPException(400, "任务没有原始视频")
+    try:
+        return analyze(row["source_video_path"], row["task_no"], segment_seconds=segment_seconds, force=force)
+    except ShotError as error:
+        raise HTTPException(400, str(error)) from error
+
+
+@app.get("/api/tasks/{task_id}/shot-frame/{index}")
+def shot_frame(task_id: str, index: int):
+    row = get_task(task_id)
+    if row is None:
+        raise HTTPException(404, "任务不存在")
+    try:
+        path = frame_path(row["task_no"], index)
+    except ShotError as error:
+        raise HTTPException(404, str(error)) from error
+    return FileResponse(path, media_type="image/jpeg")
+
+
+@app.put("/api/tasks/{task_id}/storyboard")
+def update_storyboard(task_id: str, payload: StoryboardPayload):
+    try:
+        return save_storyboard(task_id, [shot.model_dump() for shot in payload.shots])
+    except ShotError as error:
+        raise HTTPException(400, str(error)) from error
+
+
+@app.get("/api/bitable/status")
+def bitable_status():
+    from .feishu.bitable import bitable_client
+
+    client = bitable_client()
+    if client is None:
+        return {"configured": False, "hint": "填写 FEISHU_APP_ID / FEISHU_APP_SECRET 与多维表格 App Token 后可用"}
+    return {
+        "configured": True,
+        "task_table": client.config.task_table_id,
+        "base_token_set": bool(client.config.base_app_token),
+    }
+
+
+@app.post("/api/tasks/{task_id}/sync-bitable")
+def sync_task_bitable(task_id: str):
+    from .feishu.bitable import bitable_client, sync_task as sync_bitable_task
+
+    row = get_task(task_id)
+    if row is None:
+        raise HTTPException(404, "任务不存在")
+    client = bitable_client()
+    if client is None:
+        raise HTTPException(400, "多维表格未配置")
+    return {"result": sync_bitable_task(client, row), "task_no": row["task_no"]}
 
 
 @app.get("/api/feishu/status")

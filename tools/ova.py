@@ -315,6 +315,57 @@ def cmd_go(http: httpx.Client, args) -> int:
     return 0
 
 
+def cmd_analyze(http: httpx.Client, args) -> int:
+    """抽帧切段，把每段的代表帧路径给出来，供看图标注。"""
+    task = find_task(http, args.task)
+    params = {"force": "true"} if args.force else {}
+    if args.segment:
+        params["segment_seconds"] = args.segment
+    response = http.post(f"/api/tasks/{task['id']}/analyze", params=params)
+    if response.status_code != 200:
+        return fail(api_error(response), args.json)
+    payload = response.json()
+    if args.json:
+        emit(payload, True)
+        return 0
+    lines = [f"任务 {payload['task_no']}　时长 {payload['duration']} 秒　切成 {len(payload['shots'])} 段", ""]
+    for shot in payload["shots"]:
+        lines.append(f"  {shot['index']}. {shot['start']:>5.1f}s–{shot['end']:>5.1f}s　{shot['frame']}")
+    lines.append("")
+    lines.append("看图后按「一镜一句」回填：ova storyboard " + payload["task_no"] + " --file board.json")
+    emit(payload, args.json, "\n".join(lines))
+    return 0
+
+
+def cmd_storyboard(http: httpx.Client, args) -> int:
+    task = find_task(http, args.task)
+    if not args.file:
+        return fail("用 --file board.json 提供分镜，格式：{\"shots\":[{\"index\":1,\"label\":\"门头\",\"text\":\"...\"}]}", args.json)
+    try:
+        board = json.loads(Path(args.file).read_text(encoding="utf-8"))
+    except OSError as error:
+        return fail(f"读不到分镜文件：{error}", args.json)
+    except json.JSONDecodeError as error:
+        return fail(f"分镜不是合法 JSON：{error}", args.json)
+    shots = board.get("shots") if isinstance(board, dict) else board
+    if not isinstance(shots, list) or not shots:
+        return fail("分镜里没有 shots 列表", args.json)
+
+    response = http.put(f"/api/tasks/{task['id']}/storyboard", json={"shots": shots})
+    if response.status_code != 200:
+        return fail(api_error(response), args.json)
+    payload = response.json()
+    human = [
+        f"✓ 已写入分镜　{payload['sentence_count']} 句，约 {payload['estimated_seconds']} 秒",
+        "",
+        payload["script"],
+        "",
+        f"出片：ova render {payload['task_no']} --wait",
+    ]
+    emit(payload, args.json, "\n".join(human))
+    return 0
+
+
 def cmd_list(http: httpx.Client, args) -> int:
     if args.pending:
         items = http.get("/api/channel/clips", params={"status": "pending", "limit": args.limit}).json()["items"]
@@ -418,6 +469,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=int, default=900)
     parser.add_argument("--pending", action="store_true")
     parser.add_argument("--limit", type=int, default=10)
+    parser.add_argument("--file", default="")
+    parser.add_argument("--segment", type=float, default=0)
+    parser.add_argument("--force", action="store_true")
     args = parser.parse_args(argv)
 
     # 「ova send x.mp4」里的 x.mp4 落在 argument 上，按命令搬运
@@ -428,7 +482,7 @@ def main(argv: list[str] | None = None) -> int:
         args.query = args.argument2 or args.query
     elif args.command in {"bind", "房源"} and args.argument:
         args.query = args.argument
-    elif args.command in {"show", "render", "out", "script", "状态", "出片"} and args.argument:
+    elif args.command in {"show", "render", "out", "script", "analyze", "storyboard", "状态", "出片"} and args.argument:
         args.task = args.argument
     for attribute in ("video", "task"):
         if not hasattr(args, attribute):
@@ -448,6 +502,8 @@ def main(argv: list[str] | None = None) -> int:
         "render": cmd_render,
         "出片": cmd_render,
         "out": cmd_out,
+        "analyze": cmd_analyze,
+        "storyboard": cmd_storyboard,
         "help": cmd_help,
     }
     handler = handlers.get(args.command)

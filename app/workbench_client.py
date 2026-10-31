@@ -202,9 +202,18 @@ def _prepare_source(task: dict, material_root: Path) -> Path:
     return source_dir
 
 
-def _render_settings(task: dict) -> dict:
+def _flag(settings: dict, key: str, default: str = "0") -> bool:
+    return str(settings.get(key, default)).strip() not in {"", "0", "false", "False", "off"}
+
+
+def _render_settings(task: dict, safe_mode: bool = False) -> dict:
     width, height = (1080, 1920) if task["aspect_ratio"] == "9:16" else (1920, 1080)
     speaker = "Eric" if task["voice"] == "male_professional" else "Serena"
+    settings = get_settings()
+    try:
+        gap = float(settings.get("render_sentence_gap") or 0.22)
+    except ValueError:
+        gap = 0.22
     return {
         "voice": True,
         "speaker": speaker,
@@ -219,6 +228,12 @@ def _render_settings(task: dict) -> dict:
         "dedup": "light",
         "speed": 1.0,
         "shot_reuse": 2,
+        # 工作台原生支持这些，之前没显式传就吃它的默认值，
+        # 现在按「中介发圈」这个场景定死：留贴纸、不要花字刷屏、不加音效
+        "sticker_enabled": False if safe_mode else _flag(settings, "render_sticker", "0"),
+        "flower_enabled": False if safe_mode else _flag(settings, "render_flower", "0"),
+        "sfx_enabled": False if safe_mode else _flag(settings, "render_sfx", "0"),
+        "sentence_gap_seconds": 0.10 <= gap <= 1.0 and gap or 0.22,
         "target_seconds": int(task["target_duration"]),
         "width": width,
         "height": height,
@@ -270,50 +285,88 @@ def _poll_job(
     raise WorkbenchError("工作台出片超时")
 
 
+# 这些失败重试也没用，只会白白再等一轮
+_NO_RETRY_HINTS = (
+    "连不上", "无法读取工作台", "工作台未配置", "请先在系统设置", "不在授权", "找不到 ffmpeg",
+    # 显卡被别的程序占着，立刻重试必然还是撞车，只会让人多等一轮
+    "显卡正忙", "显存",
+)
+
+
+def _worth_retrying(message: str) -> bool:
+    return not any(hint in message for hint in _NO_RETRY_HINTS)
+
+
+def _failure_stage(message: str) -> str:
+    """把工作台的报错翻成中介看得懂、能自己处理的一句话。"""
+    if "显卡正忙" in message or "显存" in message:
+        return "显卡被其他程序占用，关掉 ComfyUI/游戏后再点出片"
+    if "不在授权" in message:
+        return "素材目录不在工作台授权范围内，检查 workbench_material_root"
+    return "出片失败"
+
+
+def _render_once(task_id: str, task: dict, safe_mode: bool = False) -> None:
+    """完整跑一遍出片。safe_mode 关掉工作台那边由模型决定的视觉包装。"""
+    _set_task_state(task_id, "processing", "正在准备素材", 5)
+    base_url, origin, _ = _configuration()
+    client = WorkbenchClient(base_url, origin)
+    try:
+        material_root = _material_root(client)
+        source_dir = _prepare_source(task, material_root)
+        # 输出目录同样要在授权根目录内，否则工作台会 400
+        output_dir = material_root / "ova-agent" / task["task_no"] / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        _remember_material_root(material_root)
+        _set_task_state(task_id, "processing", "正在创建视频项目", 10)
+        product = client.create_product(f"{task['task_no']} {task['source']}")
+        product_id = product["id"]
+        client.set_copy(product_id, task["script"])
+        client.set_source(product_id, source_dir)
+        client.set_output(product_id, output_dir)
+        _set_task_state(task_id, "processing", "正在启动视觉索引", 20)
+        initial = client.get(f"/api/products/{product_id}/index")
+        if not initial.get("ready"):
+            client.request_index(product_id)
+        _poll_index(client, product_id, task_id, time.monotonic() + 45 * 60)
+        _set_task_state(task_id, "processing", "正在生成配音与视频", 45)
+        job = client.enqueue(product_id, task["script"], _render_settings(task, safe_mode))
+        job_id = job["id"] if isinstance(job, dict) else job[0]["id"]
+        _poll_job(client, product_id, job_id, task_id, time.monotonic() + 60 * 60)
+        destination = EXPORT_DIR / task["task_no"] / "final.mp4"
+        client.download_result(product_id, job_id, destination)
+        with transaction() as connection:
+            connection.execute(
+                """UPDATE tasks SET status='completed', stage='已完成', progress=100,
+                   output_video_path=?, error_message='', updated_at=? WHERE id=?""",
+                (str(destination), utc_now(), task_id),
+            )
+    finally:
+        client.close()
+
+
 def render_task(task_id: str) -> None:
     task = get_task(task_id)
     if task is None:
         return
     with RENDER_LOCK:
         try:
-            _set_task_state(task_id, "processing", "正在准备素材", 5)
-            base_url, origin, _ = _configuration()
-            client = WorkbenchClient(base_url, origin)
-            try:
-                material_root = _material_root(client)
-                source_dir = _prepare_source(task, material_root)
-                # 输出目录同样要在授权根目录内，否则工作台会 400
-                output_dir = material_root / "ova-agent" / task["task_no"] / "output"
-                output_dir.mkdir(parents=True, exist_ok=True)
-                _remember_material_root(material_root)
-                _set_task_state(task_id, "processing", "正在创建视频项目", 10)
-                product = client.create_product(f"{task['task_no']} {task['source']}")
-                product_id = product["id"]
-                client.set_copy(product_id, task["script"])
-                client.set_source(product_id, source_dir)
-                client.set_output(product_id, output_dir)
-                _set_task_state(task_id, "processing", "正在启动视觉索引", 20)
-                initial = client.get(f"/api/products/{product_id}/index")
-                if not initial.get("ready"):
-                    client.request_index(product_id)
-                _poll_index(client, product_id, task_id, time.monotonic() + 45 * 60)
-                _set_task_state(task_id, "processing", "正在生成配音与视频", 45)
-                job = client.enqueue(product_id, task["script"], _render_settings(task))
-                job_id = job["id"] if isinstance(job, dict) else job[0]["id"]
-                finished = _poll_job(
-                    client, product_id, job_id, task_id, time.monotonic() + 60 * 60
-                )
-                destination = EXPORT_DIR / task["task_no"] / "final.mp4"
-                client.download_result(product_id, job_id, destination)
-                with transaction() as connection:
-                    connection.execute(
-                        """UPDATE tasks SET status='completed', stage='已完成', progress=100,
-                           output_video_path=?, error_message='', updated_at=? WHERE id=?""",
-                        (str(destination), utc_now(), task_id),
-                    )
-                _ = finished
-            finally:
-                client.close()
+            _render_once(task_id, task)
+            return
         except Exception as error:
             message = str(error)[:2000] if str(error) else error.__class__.__name__
-            _set_task_state(task_id, "failed", "出片失败", 0, message)
+
+        # 工作台的贴纸/花字/音效是模型临时决定的，模型给错一个资源名整条就废。
+        # 这种失败不该让中介白等十分钟，关掉包装再跑一次。
+        if not _worth_retrying(message):
+            _set_task_state(task_id, "failed", _failure_stage(message), 0, message)
+            return
+        _set_task_state(task_id, "processing", "首次出片失败，正在用最稳妥的参数重试", 50)
+        try:
+            _render_once(task_id, task, safe_mode=True)
+        except Exception as second:
+            detail = str(second)[:1500] if str(second) else second.__class__.__name__
+            _set_task_state(
+                task_id, "failed", "出片失败（已降级重试）", 0,
+                f"{message}\n\n降级重试仍失败：{detail}",
+            )

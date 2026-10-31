@@ -177,6 +177,16 @@ DEFAULT_SETTINGS = {
     "workbench_material_root": os.getenv("WORKBENCH_MATERIAL_ROOT", ""),
     "public_base_url": os.getenv("OVA_PUBLIC_URL", ""),
     "feishu_auto_render": os.getenv("FEISHU_AUTO_RENDER", "0"),
+    # 抽帧分镜用的 ffmpeg；留空则自动找 PATH 和工作台自带的那个
+    "ffmpeg_path": os.getenv("FFMPEG_PATH", ""),
+    "shot_segment_seconds": "6",
+    # 出片观感开关（工作台原生支持，我们只是把默认值定成适合中介发圈的组合）
+    # 贴纸由工作台那边的 LLM 选图标，模型给出不存在的资源名会直接让整条出片失败，
+    # 默认关；确认资源齐全后再开。
+    "render_sticker": os.getenv("OVA_RENDER_STICKER", "0"),
+    "render_flower": os.getenv("OVA_RENDER_FLOWER", "0"),
+    "render_sfx": os.getenv("OVA_RENDER_SFX", "0"),
+    "render_sentence_gap": os.getenv("OVA_RENDER_SENTENCE_GAP", "0.22"),
 }
 
 
@@ -244,6 +254,7 @@ def init_db() -> None:
         connection.executescript(SCHEMA)
         _ensure_column(connection, "tasks", "stage", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(connection, "tasks", "progress", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(connection, "tasks", "storyboard_json", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(connection, "tasks", "notify_chat_id", "TEXT NOT NULL DEFAULT ''")
         for key, value in DEFAULT_SETTINGS.items():
             connection.execute(
