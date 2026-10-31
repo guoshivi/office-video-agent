@@ -3,7 +3,7 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from . import __version__
 from .db import DATA_DIR, UPLOAD_DIR, get_settings, init_db, json_dumps, transaction, utc_now
 from .excel_import import import_excel
+from .semantic import is_configured, reindex_properties, search_properties, semantic_status
 from .services import (
     export_workbench_package,
     generate_script,
@@ -19,6 +20,7 @@ from .services import (
     public_property,
     serialize_task,
 )
+from .workbench_client import render_task, workbench_status
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MAX_EXCEL_SIZE = 20 * 1024 * 1024
@@ -30,6 +32,13 @@ TASK_STATUSES = {"received", "script_ready", "exported", "processing", "review",
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
+    with transaction() as connection:
+        connection.execute(
+            """UPDATE tasks SET status='failed', stage='任务已中断',
+               error_message='应用重启导致后台出片任务中断，请确认工作台状态后重新提交。',
+               updated_at=? WHERE status='processing'""",
+            (utc_now(),),
+        )
     yield
 
 
@@ -51,6 +60,8 @@ class SettingsUpdate(BaseModel):
     default_aspect_ratio: str = Field(default="9:16")
     default_voice: str = Field(default="female_warm")
     workbench_path: str = Field(default="", max_length=1000)
+    workbench_url: str = Field(default="", max_length=500)
+    workbench_output_root: str = Field(default="", max_length=1000)
 
 
 @app.get("/api/health")
@@ -62,8 +73,10 @@ def health():
         "mode": "local",
         "database": "sqlite",
         "ffmpeg_available": shutil.which("ffmpeg") is not None,
-        "workbench_configured": bool(settings.get("workbench_path")),
-        "semantic_search_configured": False,
+        "workbench_configured": bool(settings.get("workbench_url")),
+        "workbench_url": settings.get("workbench_url", ""),
+        "semantic_search_configured": is_configured(),
+        "semantic_model": semantic_status()["model"],
     }
 
 
@@ -127,6 +140,54 @@ def get_property(property_id: str):
     return public_property(row)
 
 
+@app.post("/api/properties/{property_id}/confirm")
+def confirm_property(property_id: str):
+    with transaction() as connection:
+        row = connection.execute("SELECT * FROM properties WHERE id=?", (property_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, "房源不存在")
+        duplicate_count = connection.execute(
+            "SELECT COUNT(*) FROM properties WHERE match_key=? AND match_key<>''",
+            (row["match_key"],),
+        ).fetchone()[0] if row["match_key"] else 0
+        connection.execute(
+            "UPDATE properties SET status='active', updated_at=? WHERE id=?",
+            (utc_now(), property_id),
+        )
+        updated = connection.execute("SELECT * FROM properties WHERE id=?", (property_id,)).fetchone()
+    return {**public_property(updated), "duplicate_count": duplicate_count}
+
+
+@app.get("/api/workbench/status")
+def get_workbench_status():
+    return workbench_status()
+
+
+@app.get("/api/semantic/status")
+def get_semantic_status():
+    return semantic_status()
+
+
+@app.post("/api/semantic/reindex")
+async def rebuild_semantic_index():
+    try:
+        return await reindex_properties()
+    except RuntimeError as error:
+        raise HTTPException(503, str(error)) from error
+
+
+@app.get("/api/semantic/search")
+async def semantic_search(
+    q: str = Query(min_length=1, max_length=200),
+    limit: int = Query(default=30, ge=1, le=200),
+):
+    try:
+        items = await search_properties(q.strip(), limit)
+    except RuntimeError as error:
+        raise HTTPException(503, str(error)) from error
+    return {"items": items, "total": len(items), "query": q}
+
+
 @app.post("/api/properties/import")
 async def import_properties(file: UploadFile = File(...)):
     filename = Path(file.filename or "listings.xlsx").name
@@ -168,8 +229,8 @@ async def create_task(
 ):
     if not 10 <= target_duration <= 180:
         raise HTTPException(400, "目标时长需在 10–180 秒之间")
-    if aspect_ratio not in {"9:16", "16:9", "1:1"}:
-        raise HTTPException(400, "不支持的视频比例")
+    if aspect_ratio not in {"9:16", "16:9"}:
+        raise HTTPException(400, "当前视频工作台支持 9:16 或 16:9")
     with transaction() as connection:
         property_row = connection.execute("SELECT * FROM properties WHERE id=?", (property_id,)).fetchone()
     if property_row is None:
@@ -232,6 +293,17 @@ def source_video(task_id: str):
     return FileResponse(row["source_video_path"], filename=row["original_filename"])
 
 
+@app.get("/api/tasks/{task_id}/output")
+def output_video(task_id: str):
+    row = get_task(task_id)
+    if row is None or not row["output_video_path"]:
+        raise HTTPException(404, "成片尚未生成")
+    output_path = Path(row["output_video_path"])
+    if not output_path.is_file():
+        raise HTTPException(404, "成片文件不存在")
+    return FileResponse(output_path, filename=f"{row['task_no']}.mp4", media_type="video/mp4")
+
+
 @app.put("/api/tasks/{task_id}/script")
 def update_script(task_id: str, payload: ScriptUpdate):
     if get_task(task_id) is None:
@@ -251,6 +323,28 @@ def export_task(task_id: str):
         return export_workbench_package(task_id)
     except KeyError as error:
         raise HTTPException(404, str(error)) from error
+
+
+@app.post("/api/tasks/{task_id}/render", status_code=202)
+def start_render(task_id: str, background_tasks: BackgroundTasks):
+    settings = get_settings()
+    if not settings.get("workbench_url"):
+        raise HTTPException(400, "请先在系统设置中填写视频工作台 API 地址")
+    with transaction() as connection:
+        row = connection.execute("SELECT status, script FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, "任务不存在")
+        if row["status"] == "processing":
+            raise HTTPException(409, "该任务正在出片，请勿重复提交")
+        if not row["script"].strip():
+            raise HTTPException(400, "口播草稿为空，无法出片")
+        connection.execute(
+            """UPDATE tasks SET status='processing', stage='已排队，等待视频工作台',
+               progress=1, error_message='', updated_at=? WHERE id=?""",
+            (utc_now(), task_id),
+        )
+    background_tasks.add_task(render_task, task_id)
+    return {"message": "已提交视频工作台，正在排队处理", "task": serialize_task(get_task(task_id))}
 
 
 @app.post("/api/tasks/{task_id}/status")
@@ -276,8 +370,10 @@ def read_settings():
 def update_settings(payload: SettingsUpdate):
     values = payload.model_dump()
     values["default_duration"] = str(values["default_duration"])
-    if values["default_aspect_ratio"] not in {"9:16", "16:9", "1:1"}:
-        raise HTTPException(400, "不支持的默认视频比例")
+    if values["default_aspect_ratio"] not in {"9:16", "16:9"}:
+        raise HTTPException(400, "当前视频工作台支持 9:16 或 16:9")
+    if values["workbench_url"] and not values["workbench_url"].startswith(("http://", "https://")):
+        raise HTTPException(400, "视频工作台 API 地址必须以 http:// 或 https:// 开头")
     with transaction() as connection:
         for key, value in values.items():
             connection.execute(
@@ -291,7 +387,7 @@ def update_settings(payload: SettingsUpdate):
 def data_info():
     return {
         "data_directory": str(DATA_DIR),
-        "note": "数据库、上传视频和导出任务包均保存在本地；迁移时需要备份整个 data 目录。",
+        "note": "数据库、上传视频、成片和工作台输出均保存在本地；迁移时需要备份整个 data 目录。",
     }
 
 

@@ -108,6 +108,8 @@ def serialize_task(row, include_script: bool = True) -> dict:
         "voice": row["voice"],
         "style": row["style"],
         "status": row["status"],
+        "stage": row["stage"],
+        "progress": row["progress"],
         "warnings": json.loads(row["warnings_json"] or "[]"),
         "workbench_package_path": row["workbench_package_path"],
         "output_video_path": row["output_video_path"],

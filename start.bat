@@ -13,8 +13,10 @@ if not exist ".venv\Scripts\python.exe" (
     if errorlevel 1 goto :error
 )
 if not exist data mkdir data
-start "Office Video Agent" http://127.0.0.1:8765
-".venv\Scripts\python.exe" -m uvicorn app.main:app --host 127.0.0.1 --port 8765
+if "%OVA_HOST%"=="" set "OVA_HOST=127.0.0.1"
+if "%OVA_PORT%"=="" set "OVA_PORT=8770"
+start "Office Video Agent" http://%OVA_HOST%:%OVA_PORT%
+".venv\Scripts\python.exe" -m uvicorn app.main:app --host %OVA_HOST% --port %OVA_PORT%
 goto :eof
 :error
 echo Setup failed. Check Python and network access, then run this file again.

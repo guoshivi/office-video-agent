@@ -1,6 +1,8 @@
 import json
 import os
 import tempfile
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 from pathlib import Path
 
@@ -30,7 +32,7 @@ def sample_workbook() -> bytes:
     return output.getvalue()
 
 
-def test_full_local_workflow():
+def test_full_local_workflow(monkeypatch):
     with TestClient(app) as client:
         health = client.get("/api/health")
         assert health.status_code == 200
@@ -95,3 +97,107 @@ def test_full_local_workflow():
         dashboard = client.get("/api/dashboard").json()
         assert dashboard["property_count"] == 3
         assert dashboard["task_count"] == 1
+
+        review_property = client.get("/api/properties?status=needs_review").json()["items"][0]
+        confirmed = client.post(f"/api/properties/{review_property['id']}/confirm")
+        assert confirmed.status_code == 200
+        assert confirmed.json()["status"] == "active"
+
+        from app import semantic
+
+        async def fake_embed(texts):
+            return [[1.0, 0.0, 0.0] if "A区" in text else [0.0, 1.0, 0.0] for text in texts]
+
+        monkeypatch.setenv("SEMANTIC_PROVIDER", "http")
+        monkeypatch.setenv("SEMANTIC_BASE_URL", "http://127.0.0.1:9999/v1")
+        monkeypatch.setenv("SEMANTIC_MODEL", "local-test-embedding")
+        monkeypatch.setattr(semantic, "embed_texts", fake_embed)
+        indexed = client.post("/api/semantic/reindex")
+        assert indexed.status_code == 200, indexed.text
+        assert indexed.json()["indexed_count"] == 3
+        semantic_hits = client.get("/api/semantic/search?q=安静的小办公室&limit=5")
+        assert semantic_hits.status_code == 200, semantic_hits.text
+        assert semantic_hits.json()["total"] == 3
+        assert "contact_raw" not in semantic_hits.json()["items"][0]
+
+
+def test_workbench_render_flow():
+    calls = []
+
+    class MockWorkbench(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            return
+
+        def _json(self, payload, status=200):
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            calls.append(("GET", self.path, self.headers.get("Origin")))
+            if self.path == "/api/worker":
+                self._json({"alive": True, "running_job": None, "disk": {"ok": True}})
+            elif self.path.startswith("/api/products/p1/index"):
+                self._json({"ready": True, "index": {"count": 1}, "tasks": []})
+            elif self.path.startswith("/api/jobs"):
+                self._json([{"id": "j1", "status": "done", "stage": "export", "progress": 100, "output": "mock.mp4"}])
+            elif self.path.startswith("/api/results/j1"):
+                body = b"rendered-video"
+                self.send_response(200)
+                self.send_header("Content-Type", "video/mp4")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self._json({"error": "not found"}, 404)
+
+        def do_POST(self):
+            calls.append(("POST", self.path, self.headers.get("Origin")))
+            length = int(self.headers.get("Content-Length") or 0)
+            if length:
+                self.rfile.read(length)
+            if self.path == "/api/products":
+                self._json({"id": "p1", "name": "test"}, 201)
+            elif self.path.endswith("/jobs"):
+                self._json({"id": "j1", "status": "queued"}, 202)
+            else:
+                self._json({}, 200)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), MockWorkbench)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_port}"
+    try:
+        with TestClient(app) as client:
+            properties = client.get("/api/properties?limit=10").json()["items"]
+            task = client.post(
+                "/api/tasks",
+                data={"property_id": properties[0]["id"], "target_duration": 30, "aspect_ratio": "16:9"},
+                files={"video": ("office.mp4", b"fake-source-video", "video/mp4")},
+            ).json()
+            settings = client.get("/api/settings").json()
+            settings["default_duration"] = int(settings["default_duration"])
+            settings.update({"workbench_url": base_url, "workbench_output_root": str(Path(tempfile.gettempdir()) / "ova-workbench-test")})
+            saved = client.put("/api/settings", json={
+                key: settings[key] for key in (
+                    "public_contact", "default_duration", "default_aspect_ratio",
+                    "default_voice", "workbench_path", "workbench_url", "workbench_output_root",
+                )
+            })
+            assert saved.status_code == 200, saved.text
+            workbench_state = client.get("/api/workbench/status").json()
+            assert workbench_state["online"] is True
+            response = client.post(f"/api/tasks/{task['id']}/render")
+            assert response.status_code == 202, response.text
+            finished = client.get(f"/api/tasks/{task['id']}").json()
+            assert finished["status"] == "completed", finished
+            assert finished["progress"] == 100
+            assert Path(finished["output_video_path"]).read_bytes() == b"rendered-video"
+            assert client.get(f"/api/tasks/{task['id']}/output").status_code == 200
+            assert any(call[0] == "POST" and call[1] == "/api/products" and call[2] == base_url for call in calls)
+    finally:
+        server.shutdown()
+        server.server_close()

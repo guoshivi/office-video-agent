@@ -77,6 +77,7 @@
           </div>
           <div class="toolbar panel">
             <label class="search-box"><span>⌕</span><input id="property-search" placeholder="搜索区域、楼栋、房号或面积"></label>
+            <select id="search-mode"><option value="keyword">关键词搜索</option><option value="semantic">语义搜索</option></select>
             <select id="property-status"><option value="">全部状态</option><option value="active">已匹配</option><option value="needs_review">待确认</option></select>
             <button class="button button-ghost" id="property-refresh">刷新</button>
           </div>
@@ -105,15 +106,17 @@
               <label>公开咨询引导<input name="public_contact" maxlength="300" placeholder="例如：欢迎私信咨询房源详情"></label>
               <div class="form-row">
                 <label>默认时长（秒）<input name="default_duration" type="number" min="10" max="180"></label>
-                <label>默认比例<select name="default_aspect_ratio"><option>9:16</option><option>16:9</option><option>1:1</option></select></label>
+                <label>默认比例<select name="default_aspect_ratio"><option>9:16</option><option>16:9</option></select></label>
               </div>
               <label>默认声音<select name="default_voice"><option value="female_warm">温暖女声</option><option value="male_professional">专业男声</option></select></label>
-              <label>现有视频工作台路径<input name="workbench_path" placeholder="待确认项目路径后填写"></label>
+              <label>视频工作台 API 地址<input name="workbench_url" placeholder="http://192.168.x.x:8765"></label>
+              <label>工作台输出目录<input name="workbench_output_root" placeholder="data/workbench_outputs"></label>
               <button class="button button-primary" type="submit">保存设置</button>
             </form>
             <div class="settings-side">
               <article class="panel integration-card"><div class="integration-icon">FF</div><div><h4>视频处理引擎</h4><p id="ffmpeg-status">检测中</p></div><span class="status-pill neutral" id="ffmpeg-pill">检测中</span></article>
-              <article class="panel integration-card"><div class="integration-icon">V</div><div><h4>本地向量模型</h4><p>复用现有工作台服务，待项目路径确认</p></div><span class="status-pill neutral">待接入</span></article>
+              <article class="panel integration-card"><div class="integration-icon">V</div><div><h4>本地向量模型</h4><p id="semantic-status">正在读取索引状态</p><button class="text-button semantic-button" id="semantic-reindex" type="button">建立 / 更新索引</button></div><span class="status-pill neutral" id="semantic-pill">检测中</span></article>
+              <article class="panel integration-card"><div class="integration-icon">W</div><div><h4>现有视频工作台</h4><p id="workbench-status">正在检查 API 配置</p></div><span class="status-pill neutral" id="workbench-pill">检测中</span></article>
               <article class="panel integration-card"><div class="integration-icon">飞</div><div><h4>飞书 Agent</h4><p>与 WebUI 共用任务服务，待应用授权</p></div><span class="status-pill neutral">待接入</span></article>
               <article class="panel data-card"><p class="eyebrow">PORTABLE DATA</p><h4>可迁移的本地数据</h4><p>数据库、上传视频和导出任务包统一放在 data 目录。GitHub 只保存代码，真实房源与视频不会被提交。</p><code id="data-directory">读取中…</code></article>
             </div>
@@ -141,7 +144,7 @@
         <label class="full">关联房源<select name="property_id" id="task-property" required><option value="">请先导入房源</option></select><small>通过房源绑定避免画面识别错误；待确认房源会先显示警示。</small></label>
         <label class="full">实拍视频<input type="file" name="video" id="video-input" accept="video/mp4,video/quicktime,video/x-m4v,video/x-msvideo,video/x-matroska" required><small id="video-file-name">MP4、MOV、M4V、AVI、MKV，单个不超过 2 GB</small></label>
         <label>目标时长（秒）<input name="target_duration" type="number" min="10" max="180" value="45"></label>
-        <label>视频比例<select name="aspect_ratio"><option>9:16</option><option>16:9</option><option>1:1</option></select></label>
+        <label>视频比例<select name="aspect_ratio"><option>9:16</option><option>16:9</option></select></label>
         <label>声音<select name="voice"><option value="female_warm">温暖女声</option><option value="male_professional">专业男声</option></select></label>
         <label>风格<select name="style"><option value="professional">专业简洁</option><option value="warm">自然亲和</option></select></label>
       </div>
@@ -155,7 +158,7 @@
       <div class="dialog-head"><div><p class="eyebrow" id="detail-number">TASK</p><h3 id="detail-title">任务详情</h3></div><button type="button" class="icon-button" data-close="detail-dialog">×</button></div>
       <div class="detail-layout">
         <div><video id="detail-video" controls playsinline></video><div id="detail-warnings" class="warning-list"></div><div id="export-result" class="import-result hidden"></div></div>
-        <div><label>口播草稿<textarea id="detail-script" rows="12"></textarea></label><div class="detail-actions"><button class="button button-ghost" id="save-script">保存草稿</button><button class="button button-primary" id="export-task">导出工作台任务包</button></div></div>
+        <div><label>口播草稿<textarea id="detail-script" rows="12"></textarea></label><div class="render-state" id="render-status">尚未提交真实出片</div><div class="detail-actions"><button class="button button-ghost" id="save-script">保存草稿</button><button class="button button-ghost" id="export-task">导出任务包</button><button class="button button-primary" id="render-task">提交真实出片</button><a class="button button-lime hidden" id="detail-output" href="#" download>下载成片</a></div></div>
       </div>
     </div>
   </dialog>

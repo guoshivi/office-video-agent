@@ -5,8 +5,12 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = Path(os.getenv("OVA_DATA_DIR", str(BASE_DIR / "data"))).resolve()
+load_dotenv(BASE_DIR / ".env")
+_data_setting = Path(os.getenv("OVA_DATA_DIR", "data"))
+DATA_DIR = (_data_setting if _data_setting.is_absolute() else BASE_DIR / _data_setting).resolve()
 DB_PATH = DATA_DIR / "office_video_agent.db"
 UPLOAD_DIR = DATA_DIR / "uploads"
 EXPORT_DIR = DATA_DIR / "exports"
@@ -86,6 +90,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     script TEXT NOT NULL DEFAULT '',
     warnings_json TEXT NOT NULL DEFAULT '[]',
     status TEXT NOT NULL DEFAULT 'script_ready',
+    stage TEXT NOT NULL DEFAULT '',
+    progress INTEGER NOT NULL DEFAULT 0,
     workbench_package_path TEXT NOT NULL DEFAULT '',
     output_video_path TEXT NOT NULL DEFAULT '',
     error_message TEXT NOT NULL DEFAULT '',
@@ -100,6 +106,16 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS property_embeddings (
+    property_id TEXT PRIMARY KEY REFERENCES properties(id) ON DELETE CASCADE,
+    model TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    vector_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_embeddings_model ON property_embeddings(model);
 """
 
 DEFAULT_SETTINGS = {
@@ -108,6 +124,10 @@ DEFAULT_SETTINGS = {
     "default_aspect_ratio": "9:16",
     "default_voice": "female_warm",
     "workbench_path": "",
+    "workbench_url": os.getenv("WORKBENCH_URL", ""),
+    "workbench_output_root": os.getenv(
+        "WORKBENCH_OUTPUT_ROOT", str(DATA_DIR / "workbench_outputs")
+    ),
 }
 
 
@@ -135,11 +155,21 @@ def transaction():
         connection.close()
 
 
+def _ensure_column(connection, table: str, column: str, definition: str) -> None:
+    columns = {
+        row["name"] for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+    }
+    if column not in columns:
+        connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 def init_db() -> None:
     for directory in (DATA_DIR, UPLOAD_DIR, EXPORT_DIR):
         directory.mkdir(parents=True, exist_ok=True)
     with transaction() as connection:
         connection.executescript(SCHEMA)
+        _ensure_column(connection, "tasks", "stage", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(connection, "tasks", "progress", "INTEGER NOT NULL DEFAULT 0")
         for key, value in DEFAULT_SETTINGS.items():
             connection.execute(
                 "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
