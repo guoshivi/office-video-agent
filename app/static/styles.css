@@ -978,6 +978,9 @@ textarea { resize: vertical; line-height: 1.7; width: 100%; }
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 14px;
+  /* 别让两张卡强行等高：抖音的提示比小红书长，等高 + overflow:hidden
+     会把下半截说明裁掉。宁可长短不一，也不能把排查线索藏起来。 */
+  align-items: start;
 }
 
 .platform-card {
