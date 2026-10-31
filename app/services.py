@@ -44,37 +44,74 @@ def public_property(row) -> dict:
     }
 
 
-def generate_script(property_row) -> tuple[str, list[str]]:
+def _spoken_partition(raw: str) -> str:
+    """把表里的「3隔」「5隔间」说成人话。"""
+    text = (raw or "").strip()
+    match = re.fullmatch(r"(\d+)\s*隔(间)?", text)
+    if match:
+        return f"{match.group(1)}个隔间"
+    return text
+
+
+def _spoken_orientation(raw: str) -> str:
+    # 表里有的写「南」，有的写「朝南」，统一成「朝向 X」
+    text = re.sub(r"^朝", "", (raw or "").strip())
+    return text
+
+
+def generate_script(property_row, target_duration: int = 45) -> tuple[str, list[str]]:
+    """生成能直接发出去的口播稿。
+
+    这段文字会被视频工作台当文案，既做配音也做字幕，所以必须是**对外能看**的话：
+    内部提醒只进 warnings，绝不写进 script；字段没把握的地方宁可不提，也不能编。
+    """
     settings = get_settings()
     region = safe_public_text(property_row["region_norm"], 30)
     building = safe_public_text(property_row["building_norm"], 30)
     area = safe_public_text(property_row["area_raw"], 20)
-    partition = safe_public_text(property_row["partition_raw"], 20)
-    orientation = safe_public_text(property_row["orientation_raw"], 30)
+    partition = _spoken_partition(safe_public_text(property_row["partition_raw"], 20))
+    orientation = _spoken_orientation(safe_public_text(property_row["orientation_raw"], 30))
     furnishing = safe_public_text(property_row["furnishing_layout_raw"], 60)
 
-    location = "、".join(part for part in (region, building) if part) or "当前在租"
-    opening = f"正在找办公室的朋友，今天看一套位于{location}的房源。"
-    facts = []
-    if area:
-        facts.append(f"面积信息为{area}")
-    if partition:
-        facts.append(f"格局为{partition}")
-    if orientation:
-        facts.append(f"朝向{orientation}")
-    if furnishing:
-        facts.append(f"房源特点包括{furnishing}")
-    if not facts:
-        facts.append("具体面积、格局和装修信息，需要在发布前进一步确认")
+    location = "、".join(part for part in (region, building) if part)
+    opening = (
+        f"正在找办公室的朋友看过来，今天带你看一套位于{location}的房源。"
+        if location else "正在找办公室的朋友看过来，今天带你看一套新上的房源。"
+    )
 
-    contact = settings.get("public_contact") or "欢迎私信咨询房源详情和看房安排"
-    ending = f"租金和物业费口径请以最新房源确认为准。{contact}。"
-    script = opening + "，".join(facts) + "。" + ending
-    warnings = ["这是基于房源字段生成的口播草稿，尚未经过视频画面分析或人工事实核验。"]
+    # 按重要性排序，超长就从末尾砍（价格类信息一律不写进来）
+    clauses = []
+    if area:
+        clauses.append(f"{area}")
+    if partition:
+        # 「3个隔间」直接说数字，像「店面」「展厅」这种要补个说法，否则读着突兀
+        clauses.append(partition if re.fullmatch(r"\d+个隔间", partition) else f"户型是{partition}")
+    if orientation:
+        # 这一列不全是方位：还有「边套」「整层」，套「朝」字就说不通了
+        clauses.append(f"朝{orientation}" if re.search(r"[东南西北]", orientation) else orientation)
+    if furnishing:
+        # 这一列混着「带家具」和「展厅」两种写法，纯名词补个「格局」才读得通
+        clauses.append(furnishing if re.search(r"带|精装|简装|毛坯|家私|家具", furnishing) else f"{furnishing}格局")
+
+    contact = (settings.get("public_contact") or "欢迎私信咨询房源详情和看房安排").strip()
+    ending = f"{contact}。"
+
+    # 中文口播约每秒 4 字，目标时长决定能说多少，避免配音被硬切或字幕溢出
+    budget = max(60, int(max(10, target_duration) * 4.2))
+    while len(clauses) > 1 and len(opening) + len("，".join(clauses)) + len(ending) > budget:
+        clauses.pop()
+
+    if clauses:
+        body = f"这套{'，'.join(clauses)}。"
+    else:
+        body = "具体面积和格局，可以私信我详细说。"
+    script = opening + body + ending
+
+    warnings = ["这是基于房源字段生成的口播稿，未经视频画面核验，出片前请过一遍。"]
     if property_row["rent_raw"]:
-        warnings.append("原表租金口径可能不统一，草稿未直接播报租金，请确认后再补充。")
+        warnings.append("草稿没有播报租金。要在视频里报价，先把租金口径确认清楚再手动加。")
     if property_row["status"] == "needs_review":
-        warnings.append("该房源存在重复或缺失匹配字段，生成前需要人工确认。")
+        warnings.append("该房源存在重复或缺失匹配字段，出片前建议先确认房源本身。")
     return script, warnings
 
 
@@ -97,7 +134,7 @@ def create_task_record(
     task_no: str = "",
 ) -> str:
     """WebUI 与飞书共用的唯一建任务入口，避免两个入口各写一套状态机。"""
-    script, warnings = generate_script(property_row)
+    script, warnings = generate_script(property_row, target_duration)
     task_id = str(uuid.uuid4())
     now = utc_now()
     with transaction() as connection:
