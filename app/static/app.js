@@ -183,9 +183,9 @@ async function loadTasks() {
 }
 
 async function loadSettings() {
-  const [settings, health, dataInfo, workbench] = await Promise.all([
+  const [settings, health, dataInfo, workbench, feishu] = await Promise.all([
     api("/api/settings"), api("/api/health"), api("/api/system/data-info"),
-    api("/api/workbench/status"), loadSemanticStatus(),
+    api("/api/workbench/status"), api("/api/feishu/status"), loadSemanticStatus(),
   ]);
   state.settings = settings;
   const form = $("#settings-form");
@@ -208,6 +208,15 @@ async function loadSettings() {
   $("#workbench-pill").textContent = workbench.online ? "在线" : health.workbench_configured ? "离线" : "待配置";
   $("#workbench-pill").className = `status-pill ${workbench.online ? "active" : health.workbench_configured ? "failed" : "needs_review"}`;
   $("#data-directory").textContent = dataInfo.data_directory;
+  renderFeishu(feishu);
+}
+
+function renderFeishu(feishu) {
+  const pill = $("#feishu-pill");
+  const label = feishu.connected ? "在线" : feishu.configured ? "未连接" : "待配置";
+  $("#feishu-status").textContent = feishu.hint || "读取中";
+  pill.textContent = label;
+  pill.className = `status-pill ${feishu.connected ? "active" : feishu.configured ? "failed" : "needs_review"}`;
 }
 
 function openDialog(id) {
@@ -405,6 +414,17 @@ $("#semantic-reindex").addEventListener("click", async () => {
     toast(`向量索引完成，共 ${result.indexed_count} 条`);
   } catch (error) { toast(error.message, true); }
   finally { button.textContent = "建立 / 更新索引"; button.disabled = false; }
+});
+$("#feishu-restart").addEventListener("click", async () => {
+  const button = $("#feishu-restart");
+  button.disabled = true;
+  button.textContent = "正在重连…";
+  try {
+    const result = await api("/api/feishu/restart", { method: "POST" });
+    renderFeishu(result);
+    toast(result.started ? "长连接已发起，正在等待飞书握手" : "未能启动，请检查 .env 中的应用凭据");
+  } catch (error) { toast(error.message, true); }
+  finally { button.textContent = "重连长连接"; button.disabled = false; }
 });
 $("#excel-drop input").addEventListener("change", (event) => {
   $("#excel-file-name").textContent = event.target.files[0]?.name || "";

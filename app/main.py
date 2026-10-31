@@ -1,5 +1,5 @@
+import logging
 import shutil
-import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -9,16 +9,18 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import __version__
-from .db import DATA_DIR, UPLOAD_DIR, get_settings, init_db, json_dumps, transaction, utc_now
+from .db import DATA_DIR, UPLOAD_DIR, get_settings, init_db, transaction, utc_now
 from .excel_import import import_excel
+from .feishu.bot import get_bot, start_bot
 from .semantic import is_configured, reindex_properties, search_properties, semantic_status
 from .services import (
+    create_task_record,
     export_workbench_package,
-    generate_script,
     get_task,
     new_task_no,
     public_property,
     serialize_task,
+    set_task_script,
 )
 from .workbench_client import render_task, workbench_status
 
@@ -27,6 +29,8 @@ MAX_EXCEL_SIZE = 20 * 1024 * 1024
 MAX_VIDEO_SIZE = 2 * 1024 * 1024 * 1024
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".avi", ".mkv"}
 TASK_STATUSES = {"received", "script_ready", "exported", "processing", "review", "completed", "failed"}
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -39,7 +43,16 @@ async def lifespan(_: FastAPI):
                updated_at=? WHERE status='processing'""",
             (utc_now(),),
         )
+    # 飞书长连接在独立线程里跑；没配凭据时只记录状态，不影响 WebUI
+    try:
+        start_bot()
+    except Exception:
+        logger.exception("飞书机器人启动失败")
     yield
+    try:
+        get_bot().stop()
+    except Exception:
+        pass
 
 
 app = FastAPI(title="房源视频工作台", version=__version__, lifespan=lifespan)
@@ -77,6 +90,7 @@ def health():
         "workbench_url": settings.get("workbench_url", ""),
         "semantic_search_configured": is_configured(),
         "semantic_model": semantic_status()["model"],
+        "feishu_state": get_bot().state,
     }
 
 
@@ -241,7 +255,7 @@ async def create_task(
     if extension not in VIDEO_EXTENSIONS:
         raise HTTPException(400, "视频格式支持 MP4、MOV、M4V、AVI、MKV")
 
-    task_id = str(uuid.uuid4())
+    # 先落盘到最终目录再建任务：失败时整目录删掉，不留半截数据
     task_no = new_task_no()
     task_dir = UPLOAD_DIR / task_no
     task_dir.mkdir(parents=True, exist_ok=True)
@@ -256,26 +270,21 @@ async def create_task(
                 output.write(chunk)
         if size == 0:
             raise HTTPException(400, "上传的视频为空")
-        script, warnings = generate_script(property_row)
-        now = utc_now()
-        with transaction() as connection:
-            connection.execute(
-                """INSERT INTO tasks(
-                    id, task_no, property_id, source, original_filename, source_video_path,
-                    target_duration, aspect_ratio, voice, style, script, warnings_json,
-                    status, created_at, updated_at
-                ) VALUES (?, ?, ?, 'webui', ?, ?, ?, ?, ?, ?, ?, ?, 'script_ready', ?, ?)""",
-                (
-                    task_id, task_no, property_id, original_filename, str(video_path),
-                    target_duration, aspect_ratio, voice, style, script,
-                    json_dumps(warnings), now, now,
-                ),
-            )
+        task_id = create_task_record(
+            property_row=property_row,
+            video_path=video_path,
+            original_filename=original_filename,
+            target_duration=target_duration,
+            aspect_ratio=aspect_ratio,
+            voice=voice,
+            style=style,
+            source="webui",
+            task_no=task_no,
+        )
     except Exception:
-        video_path.unlink(missing_ok=True)
+        shutil.rmtree(task_dir, ignore_errors=True)
         raise
     return serialize_task(get_task(task_id))
-
 
 @app.get("/api/tasks/{task_id}")
 def task_detail(task_id: str):
@@ -308,12 +317,8 @@ def output_video(task_id: str):
 def update_script(task_id: str, payload: ScriptUpdate):
     if get_task(task_id) is None:
         raise HTTPException(404, "任务不存在")
-    with transaction() as connection:
-        connection.execute(
-            """UPDATE tasks SET script=?, status='script_ready',
-               workbench_package_path='', updated_at=? WHERE id=?""",
-            (payload.script.strip(), utc_now(), task_id),
-        )
+    if not set_task_script(task_id, payload.script):
+        raise HTTPException(400, "口播文案不能为空")
     return serialize_task(get_task(task_id))
 
 
@@ -389,6 +394,30 @@ def data_info():
         "data_directory": str(DATA_DIR),
         "note": "数据库、上传视频、成片和工作台输出均保存在本地；迁移时需要备份整个 data 目录。",
     }
+
+
+@app.get("/api/feishu/status")
+def feishu_status():
+    return get_bot().status()
+
+
+@app.post("/api/feishu/restart")
+def restart_feishu():
+    bot = get_bot()
+    bot.stop()
+    started = bot.start()
+    return {"started": started, **bot.status()}
+
+
+@app.get("/api/feishu/events")
+def feishu_events(limit: int = Query(default=30, ge=1, le=200)):
+    with transaction() as connection:
+        rows = connection.execute(
+            """SELECT message_id, chat_id, msg_type, user_text, action, created_at
+               FROM feishu_events ORDER BY id DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+    return {"items": [dict(row) for row in rows]}
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
