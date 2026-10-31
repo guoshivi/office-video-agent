@@ -1,6 +1,7 @@
 # 房源视频助手（office-video-agent）
 
-给办公室租赁中介用的一套本地流水线：**拍好的房源视频 → 绑定房源 → 自动口播 → 出竖版成片**。
+给办公室租赁中介用的一套本地流水线：**拍好的房源视频 → 绑定房源 → 自动口播 → 出竖版成片
+→ 人工审核 → 发小红书 / 抖音**。
 
 三个入口共用同一个任务服务，不会出现「网页里是一套、飞书里又是另一套」：
 
@@ -26,6 +27,12 @@
                     出片（调用本机「视频工作台」）
                           ▼
                     final.mp4 → 回到对话里
+                          ▼
+                    自动入审核队列 + 跑预检
+                          ▼
+              人看一遍（机器拦住错误的，人决定要不要发）
+                          ▼
+                发布：小红书（MCP）/ 抖音（CDP）
 ```
 
 口播由房源字段生成，**不会播报租金**（原表口径不统一），
@@ -110,6 +117,34 @@ FEISHU_TASK_TABLE_ID=tblXXX
 表里需要一列「任务编号」，写入前按它查重、有则更新。
 手动同步：`POST /api/tasks/{id}/sync-bitable`。
 
+## 审核台（出片和发布之间)
+
+出片之后不会直接发出去，先进审核队列。**这不是流程冗余**——房源类内容写错面积、
+串了楼栋、漏了微信号，发出去是真实的经营损失，删帖补不回来。
+
+机器负责能比对的部分（`app/review/precheck.py`，纯函数，九组检查）：
+
+- 面积 / 租金与房源库不一致 → **blocking**
+- 文案里出现别的楼栋（串房）→ **blocking**
+- 微信号、QQ、手机号、加我 → **blocking**；最低价、保证、私密我 → warn
+- 内部用语漏进成片（"请以最新房源确认为准"这种）→ **blocking**
+- 没音轨、横版发竖版、时长离谱、这套已经发过 → warn
+
+人工负责机器不懂的部分。审核页是左右分栏，键盘 `J/K` 翻条、`A` 通过、`R` 驳回；
+预检有 blocking 时按钮会变成"强行通过"，点下去还要再确认一次，并且留下记录。
+
+队列可以镜像到飞书多维表格（`REVIEW_BITABLE_SYNC=1`），手机上审、电脑上审都行。
+**本地 SQLite 始终是权威，表格只是它的一个视图**；没凭据就整体静默失效，审核台照常能用。
+
+完整说明：[docs/review.md](docs/review.md)。
+
+```bash
+ova review                 # 看待审队列
+ova check V20261101-ABCDE  # 重跑预检，看逐项结论
+ova approve V20261101-ABCDE
+ova reject V20261101-ABCDE --note "画面太暗"
+```
+
 ## 发布到小红书 / 抖音
 
 出片之后可以直接推到平台。两个平台走的路不一样：
@@ -136,24 +171,31 @@ vendor\xhs-mcp\xiaohongshu-mcp.exe -port :18060
 
 ```
 app/
-  main.py            API 入口（WebUI、飞书、命令行都调这里）
+  main.py            API 入口（只做装配：注册路由、挂静态文件、起后台线程）
+  db.py              表结构与默认设置（唯一知道 DDL 的地方）
   channel.py         多入口「先收视频后绑房源」的缓冲层
   shots.py           抽帧分镜：切段、代表帧、一镜一句回填
   services.py        口播生成、脱敏、任务序列化
   excel_import.py    房源 Excel 导入（保留原始行与颜色标记）
   semantic.py        向量 + 规则混合检索
   workbench_client.py 视频工作台适配（建项目/索引/出片/回传）
+  api/               路由按领域拆开：publish / review
+  review/            审核台：precheck（纯函数）/ store（只存取）/ service（编排）/ bitable_bridge
   publish/           发布到小红书（MCP）/ 抖音（CDP）：policy / mcp_client / xhs / douyin
   feishu/            独立机器人（方案 B）：client / intents / handlers / bitable / bot
   static/            无构建链的原生前端
 tools/
-  ova.py             命令行入口（send/bind/analyze/storyboard/render）
+  ova.py             命令行入口（send/bind/analyze/storyboard/render/review/approve/publish）
   vision_probe.py    验证多模态向量模型确实能编码画面
   feishu_check.py    飞书凭据自检，逐步定位缺哪个权限
   fetch_publish_tools.py 拉取发布用的第三方二进制
+  douyin_probe.py    CDP 探测抖音上传页，校准选择器
+  ui_shot.py         给各个页面截图，改完前端用它对一眼
 data/                数据库、上传视频、成片、导出包（不进 Git）
 docs/feishu-setup.md 飞书两种接法的完整步骤
+docs/review.md       审核台：预检规则、状态机、多维表格桥接
 docs/publish.md      发布链路、平台差异、已验证项与踩过的坑
+docs/runbook.md      运维手册：启动、日常流程、故障排查、模块边界
 ```
 
 ## 迁移到另一台电脑
@@ -170,4 +212,7 @@ docs/publish.md      发布链路、平台差异、已验证项与踩过的坑
 - 出片依赖本机「视频工作台」，它只接受**授权 NAS 根目录内**的素材；
   本程序会自动读 `/api/roots` 并把素材镜像进去，所以不要手改工作台的目录授权
 - 目标时长受原片总长限制，30 秒目标配 20 秒素材只能出 20 秒
+- 预检只比数字、查词表，不懂语义。「采光特别好」是不是吹牛它看不出来
+- 串房检测依赖房源库里的楼栋全名，文案用简称时可能漏检
+- 抖音发布依赖一个开着的专用 Chrome 窗口；关掉就发不了，也不适合无人值守过夜
 - 方案 A 要求 WorkBuddy 一直开着；要无人值守就上方案 B

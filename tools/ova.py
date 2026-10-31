@@ -9,6 +9,14 @@ WorkBuddy 桌面、飞书/企业微信里的会话、朋友自己开终端，都
     ova send ./office.mp4              # 先把视频放进来
     ova bind "A区 中关村大厦 1201"      # 再说房源，自动生成口播
     ova render V20261101-ABCDE --wait  # 出片并等结果
+
+审核与发布：
+    ova review                         # 看待审队列（机器预检结论）
+    ova check V20261101-ABCDE          # 重跑预检，只看没通过的项
+    ova approve V20261101-ABCDE        # 通过；预检有红项时要加 --force
+    ova reject V20261101-ABCDE --note "画面太暗"
+    ova platforms                      # 两个平台的连通性与今日额度
+    ova publish V20261101-ABCDE --set xiaohongshu
 """
 
 from __future__ import annotations
@@ -441,6 +449,128 @@ def cmd_out(http: httpx.Client, args) -> int:
     return 0
 
 
+def cmd_review(http: httpx.Client, args) -> int:
+    """看待审队列。默认只列待审，--set 可以看别的状态。"""
+    params = {"limit": args.limit}
+    if args.pending:
+        params["status"] = "pending"
+    elif args.set:
+        params["status"] = args.set
+
+    data = http.get("/api/review/items", params=params).json()
+    items = data["items"]
+    if args.json:
+        emit(data, True)
+        return 0
+    if not items:
+        print("审核队列是空的。出片完成后会自动进来，也可以 ova review --set '' 看全部")
+        return 0
+
+    marks = {"blocking": "✗", "warn": "!", "ok": "✓", "unknown": "·"}
+    for item in items:
+        precheck = item["precheck"]
+        level = precheck["level"]
+        print(f"{marks.get(level, '·')} {item['task_no']}　{level:<9} {item.get('property_label', '')}")
+        print(f"    {precheck['summary']}")
+        for check in precheck["blocking"][:2]:
+            print(f"    必须处理：{check['detail']}")
+    counts = data.get("counts", {})
+    print(f"\n共 {len(items)} 条　待审 {counts.get('pending', 0)}")
+    print("通过：ova approve <任务编号>　驳回：ova reject <任务编号> --note 原因")
+    return 0
+
+
+def cmd_check(http: httpx.Client, args) -> int:
+    """重跑预检。只打印需要处理的项，通过的折叠掉。"""
+    task = find_task(http, args.task)
+    response = http.post(f"/api/review/{task['id']}/precheck")
+    if response.status_code != 200:
+        return fail(api_error(response), args.json)
+    payload = response.json()
+
+    if args.json:
+        emit(payload, True)
+        return 0
+    print(f"{task['task_no']}　{payload['summary']}")
+    for check in payload["checks"]:
+        if check["level"] == "ok":
+            continue
+        flag = "必须处理" if check["level"] == "blocking" else "建议看看"
+        print(f"  [{flag}] {check['label']}：{check['detail']}")
+    passed = [check for check in payload["checks"] if check["level"] == "ok"]
+    print(f"\n通过 {len(passed)} 项")
+    return 0
+
+
+def cmd_approve(http: httpx.Client, args) -> int:
+    task = find_task(http, args.task)
+    body = {"note": args.note or "", "confirm_risky": args.force}
+    if args.set:
+        body["platforms"] = [name.strip() for name in args.set.split(",") if name.strip()]
+
+    response = http.post(f"/api/review/{task['id']}/approve", json=body)
+    if response.status_code != 200:
+        return fail(api_error(response), args.json)
+    data = response.json()
+    emit(data, args.json, data.get("message") or "已通过")
+    return 0
+
+
+def cmd_reject(http: httpx.Client, args) -> int:
+    if not args.note:
+        return fail("驳回必须写原因：ova reject <任务编号> --note 画面太暗", args.json)
+    task = find_task(http, args.task)
+    response = http.post(f"/api/review/{task['id']}/reject", json={"note": args.note})
+    if response.status_code != 200:
+        return fail(api_error(response), args.json)
+    data = response.json()
+    emit(data, args.json, data.get("message") or "已驳回")
+    return 0
+
+
+def cmd_publish(http: httpx.Client, args) -> int:
+    task = find_task(http, args.task)
+    body: dict = {"force": args.force}
+    if args.set:
+        body["platforms"] = [name.strip() for name in args.set.split(",") if name.strip()]
+
+    response = http.post(f"/api/tasks/{task['id']}/publish", json=body)
+    if response.status_code != 200:
+        return fail(api_error(response), args.json)
+    data = response.json()
+
+    if args.json:
+        emit(data, True)
+        return 0
+    if not data.get("ok"):
+        print(f"没发出去：{data.get('message', '')}")
+    for platform, result in (data.get("results") or {}).items():
+        label = {"xiaohongshu": "小红书", "douyin": "抖音"}.get(platform, platform)
+        mark = "✓" if result.get("ok") else "✗"
+        print(f"{mark} {label}：{result.get('message', '')[:160]}")
+    return 0 if data.get("ok") else 1
+
+
+def cmd_platforms(http: httpx.Client, args) -> int:
+    data = http.get("/api/publish/status").json()
+    if args.json:
+        emit(data, True)
+        return 0
+    for key, label in (("xiaohongshu", "小红书"), ("douyin", "抖音")):
+        info = data.get(key, {})
+        quota = info.get("quota", {})
+        if info.get("logged_in"):
+            state = "已登录"
+        elif info.get("reachable"):
+            state = "服务在线，未登录"
+        else:
+            state = "服务没启动"
+        print(f"{label}：{state}　今日 {quota.get('used_today', 0)}/{quota.get('daily_limit', '—')} 条")
+        if not info.get("reachable") and info.get("message"):
+            print(f"  {info['message'][:160]}")
+    return 0
+
+
 def cmd_help(http: httpx.Client, args) -> int:
     print(__doc__.strip())
     return 0
@@ -472,6 +602,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--file", default="")
     parser.add_argument("--segment", type=float, default=0)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--note", default="", help="审核备注；驳回时必填")
     args = parser.parse_args(argv)
 
     # 「ova send x.mp4」里的 x.mp4 落在 argument 上，按命令搬运
@@ -482,7 +613,10 @@ def main(argv: list[str] | None = None) -> int:
         args.query = args.argument2 or args.query
     elif args.command in {"bind", "房源"} and args.argument:
         args.query = args.argument
-    elif args.command in {"show", "render", "out", "script", "analyze", "storyboard", "状态", "出片"} and args.argument:
+    elif args.command in {
+        "show", "render", "out", "script", "analyze", "storyboard", "状态", "出片",
+        "check", "预检", "approve", "通过", "reject", "驳回", "publish", "发布",
+    } and args.argument:
         args.task = args.argument
     for attribute in ("video", "task"):
         if not hasattr(args, attribute):
@@ -504,6 +638,18 @@ def main(argv: list[str] | None = None) -> int:
         "out": cmd_out,
         "analyze": cmd_analyze,
         "storyboard": cmd_storyboard,
+        "review": cmd_review,
+        "审核": cmd_review,
+        "check": cmd_check,
+        "预检": cmd_check,
+        "approve": cmd_approve,
+        "通过": cmd_approve,
+        "reject": cmd_reject,
+        "驳回": cmd_reject,
+        "publish": cmd_publish,
+        "发布": cmd_publish,
+        "platforms": cmd_platforms,
+        "平台": cmd_platforms,
         "help": cmd_help,
     }
     handler = handlers.get(args.command)

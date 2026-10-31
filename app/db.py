@@ -186,6 +186,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_publish_records_task_platform
     ON publish_records(task_id, platform);
 CREATE INDEX IF NOT EXISTS idx_publish_records_platform_time
     ON publish_records(platform, created_at);
+
+-- 审核队列：出片后进入待审，人裁决后决定发还是重做。
+-- 单独一张表而不是塞进 tasks.status，是因为「任务是否出片完成」和
+-- 「这条片能不能对外发」是两个正交的维度，混在一起会让状态机爆炸。
+CREATE TABLE IF NOT EXISTS review_items (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'pending',   -- pending|approved|rejected|published|skipped
+    level TEXT NOT NULL DEFAULT 'ok',         -- ok|warn|blocking，预检总体结论
+    precheck_json TEXT NOT NULL DEFAULT '{}',
+    reviewer TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    decided_at TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_review_items_status ON review_items(status, created_at);
 """
 
 DEFAULT_SETTINGS = {
@@ -223,6 +241,8 @@ DEFAULT_SETTINGS = {
     "publish_min_interval_minutes": os.getenv("PUBLISH_MIN_INTERVAL_MINUTES", "60"),
     # 审核通过后是否自动发；默认关，等审核台跑顺了再打开
     "publish_auto_after_review": os.getenv("PUBLISH_AUTO_AFTER_REVIEW", "0"),
+    # 审核队列是否镜像到飞书多维表格并轮询人工裁决（需要 bitable 凭据）
+    "review_bitable_sync": os.getenv("REVIEW_BITABLE_SYNC", "0"),
 }
 
 
