@@ -123,6 +123,8 @@ def test_full_local_workflow(monkeypatch):
 
 def test_workbench_render_flow():
     calls = []
+    # 工作台只接受授权根目录内的路径，测试里模拟一块可写的“NAS 根”
+    material_root = Path(tempfile.mkdtemp(prefix="ova-nas-root-"))
 
     class MockWorkbench(BaseHTTPRequestHandler):
         def log_message(self, *_args):
@@ -140,6 +142,8 @@ def test_workbench_render_flow():
             calls.append(("GET", self.path, self.headers.get("Origin")))
             if self.path == "/api/worker":
                 self._json({"alive": True, "running_job": None, "disk": {"ok": True}})
+            elif self.path == "/api/roots":
+                self._json([{"id": 0, "name": "nas", "path": str(material_root)}])
             elif self.path.startswith("/api/products/p1/index"):
                 self._json({"ready": True, "index": {"count": 1}, "tasks": []})
             elif self.path.startswith("/api/jobs"):
@@ -196,6 +200,9 @@ def test_workbench_render_flow():
             assert finished["status"] == "completed", finished
             assert finished["progress"] == 100
             assert Path(finished["output_video_path"]).read_bytes() == b"rendered-video"
+            # 素材必须被镜像到授权根目录内，否则真实工作台会 400
+            staged = list((material_root / "ova-agent").rglob("*.mp4"))
+            assert staged, "source video must be staged inside the authorized root"
             assert client.get(f"/api/tasks/{task['id']}/output").status_code == 200
             assert any(call[0] == "POST" and call[1] == "/api/products" and call[2] == base_url for call in calls)
     finally:
