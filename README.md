@@ -77,12 +77,46 @@ ova list --pending             还有哪些视频没绑定
 
 全部支持 `--json`；服务在别的机器上加 `--api http://ip:8770`。
 
+## 分镜：一镜一句
+
+工作台是按**句**把文案匹配到镜头的，所以「哪段画面配哪句文案」的把手在文案怎么分句上。
+
+```bat
+ova analyze V20261101-ABCDE           :: 按时间切段，每段抽一张代表帧
+ova storyboard V20261101-ABCDE --file board.json
+```
+
+`board.json` 里每个镜头一句话（≤ 24 字），写完会合成最终 `script` 交给工作台。
+句子顺序跟着拍摄顺序走：门头 → 前台 → 工位 → 会议室 → 窗外。
+
+技术选型（为什么用本地多模态向量做归类、用 WorkBuddy 写文案）见
+[docs/video-analysis.md](docs/video-analysis.md)。
+
+## 多维表格
+
+任务进度可以写回飞书多维表格。**写入走 REST，不需要事件订阅**，
+所以即使用 WorkBuddy 的飞书通道收消息（方案 A），也可以单独建一个
+只有 `bitable:app` 权限的应用来写表，两边不会抢长连接。
+
+配置 `.env`：
+
+```
+FEISHU_APP_ID=cli_xxx
+FEISHU_APP_SECRET=xxx
+FEISHU_BASE_APP_TOKEN=BASCxxx
+FEISHU_TASK_TABLE_ID=tblXXX
+```
+
+表里需要一列「任务编号」，写入前按它查重、有则更新。
+手动同步：`POST /api/tasks/{id}/sync-bitable`。
+
 ## 目录
 
 ```
 app/
   main.py            API 入口（WebUI、飞书、命令行都调这里）
   channel.py         多入口「先收视频后绑房源」的缓冲层
+  shots.py           抽帧分镜：切段、代表帧、一镜一句回填
   services.py        口播生成、脱敏、任务序列化
   excel_import.py    房源 Excel 导入（保留原始行与颜色标记）
   semantic.py        向量 + 规则混合检索
@@ -90,7 +124,8 @@ app/
   feishu/            独立机器人（方案 B）：client / intents / handlers / bitable / bot
   static/            无构建链的原生前端
 tools/
-  ova.py             命令行入口
+  ova.py             命令行入口（send/bind/analyze/storyboard/render）
+  vision_probe.py    验证多模态向量模型确实能编码画面
   feishu_check.py    飞书凭据自检，逐步定位缺哪个权限
 data/                数据库、上传视频、成片、导出包（不进 Git）
 docs/feishu-setup.md 飞书两种接法的完整步骤
