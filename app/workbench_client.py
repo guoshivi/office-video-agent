@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import shutil
 import threading
@@ -9,7 +10,10 @@ from urllib.parse import urlsplit
 import httpx
 
 from .db import DATA_DIR, EXPORT_DIR, get_settings, transaction, utc_now
+from .hygiene import clean_internal_sentences
 from .services import get_task
+
+logger = logging.getLogger(__name__)
 
 RENDER_LOCK = threading.Lock()
 
@@ -309,6 +313,14 @@ def _failure_stage(message: str) -> str:
 def _render_once(task_id: str, task: dict, safe_mode: bool = False) -> None:
     """完整跑一遍出片。safe_mode 关掉工作台那边由模型决定的视觉包装。"""
     _set_task_state(task_id, "processing", "正在准备素材", 5)
+    # 内部提醒句必须在送进配音之前摘掉：等渲染完才在审核台发现，
+    # 就要重跑一次十几分钟的渲染，而且这条片子当天大概率发不出去。
+    script, removed = clean_internal_sentences(task["script"])
+    if removed:
+        logger.warning(
+            "口播里有 %d 句内部用语，已在出片前摘掉（任务 %s）：%s",
+            len(removed), task["task_no"], "；".join(removed)[:200],
+        )
     base_url, origin, _ = _configuration()
     client = WorkbenchClient(base_url, origin)
     try:
@@ -321,7 +333,7 @@ def _render_once(task_id: str, task: dict, safe_mode: bool = False) -> None:
         _set_task_state(task_id, "processing", "正在创建视频项目", 10)
         product = client.create_product(f"{task['task_no']} {task['source']}")
         product_id = product["id"]
-        client.set_copy(product_id, task["script"])
+        client.set_copy(product_id, script)
         client.set_source(product_id, source_dir)
         client.set_output(product_id, output_dir)
         _set_task_state(task_id, "processing", "正在启动视觉索引", 20)
@@ -330,7 +342,7 @@ def _render_once(task_id: str, task: dict, safe_mode: bool = False) -> None:
             client.request_index(product_id)
         _poll_index(client, product_id, task_id, time.monotonic() + 45 * 60)
         _set_task_state(task_id, "processing", "正在生成配音与视频", 45)
-        job = client.enqueue(product_id, task["script"], _render_settings(task, safe_mode))
+        job = client.enqueue(product_id, script, _render_settings(task, safe_mode))
         job_id = job["id"] if isinstance(job, dict) else job[0]["id"]
         _poll_job(client, product_id, job_id, task_id, time.monotonic() + 60 * 60)
         destination = EXPORT_DIR / task["task_no"] / "final.mp4"

@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..db import get_settings, transaction
+from ..hygiene import INTERNAL_PHRASES
 from ..publish import policy
 from ..shots import ShotError, _find_binary, _run
 
@@ -53,20 +54,8 @@ MAX_DURATION = 120
 
 # 这些词属于"内部对内部"的表述，一旦进到口播里就是事故。
 # 「口径」是最典型的：中介内部对数据口径有争议，但不能对客户说。
-INTERNAL_PHRASES = (
-    "口径",
-    "请以最新",
-    "以最新房源确认",
-    "以实际为准",
-    "内部",
-    "备注",
-    "待确认",
-    "需确认",
-    "仅供参考",
-    "不对外",
-    "自动生成",
-    "AI 生成",
-)
+# 词表在 app/hygiene.py——出片前那次"摘句"用的是同一份，
+# 否则会出现「生成时没拦、审核时才拦」的两份定义慢慢漂移。
 
 
 @dataclass

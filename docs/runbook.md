@@ -15,6 +15,7 @@ app/
 ├── services.py          任务与房源的基础读写
 ├── excel_import.py      房源库导入（标题 + 第 2 行表头）
 ├── channel.py           多渠道收片（本机上传 / 飞书 / 工作台回传）
+├── hygiene.py           措辞卫生：内部提醒句的词表与摘句（出片前 + 审核时共用）
 ├── shots.py             视频分析、抽帧、分镜
 ├── semantic.py          本地向量检索
 ├── workbench_client.py  对接现有的视频工作台（出片）
