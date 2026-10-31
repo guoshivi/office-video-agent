@@ -237,6 +237,45 @@ class FeishuClient:
         )
         return payload.get("data", {}).get("items", []) or []
 
+    def bitable_search_all(
+        self,
+        table_id: str,
+        field_name: str,
+        value: str,
+        *,
+        page_size: int = 100,
+        max_pages: int = 20,
+    ) -> list[dict]:
+        """按字段值查全部记录，自动翻页。
+
+        `bitable_search` 只取第一页 20 条——查重（「这套房源写过没有」）够用，
+        但审核裁决同步要的是"所有被标成通过的"，只取 20 条会让第 21 条永远同步不到。
+        `max_pages` 是保险丝：表格出问题时宁可少拉几条，也别把线程卡死。
+        """
+        path = (
+            f"/open-apis/bitable/v1/apps/{self.config.base_app_token}"
+            f"/tables/{table_id}/records/search"
+        )
+        body = {
+            "filter": {
+                "conjunction": "and",
+                "conditions": [{"field_name": field_name, "operator": "is", "value": [value]}],
+            }
+        }
+        items: list[dict] = []
+        page_token = ""
+        for _ in range(max_pages):
+            params: dict = {"page_size": page_size}
+            if page_token:
+                params["page_token"] = page_token
+            payload = self._request("POST", path, params=params, json_body=body)
+            data = payload.get("data", {}) or {}
+            items.extend(data.get("items", []) or [])
+            page_token = data.get("page_token") or ""
+            if not data.get("has_more") or not page_token:
+                break
+        return items
+
 
 def _json_or_raise(response: httpx.Response, hint: str) -> dict:
     if response.status_code >= 400:
