@@ -75,6 +75,7 @@ class SettingsUpdate(BaseModel):
     workbench_path: str = Field(default="", max_length=1000)
     workbench_url: str = Field(default="", max_length=500)
     workbench_output_root: str = Field(default="", max_length=1000)
+    workbench_material_root: str = Field(default="", max_length=1000)
 
 
 @app.get("/api/health")

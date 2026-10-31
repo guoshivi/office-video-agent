@@ -35,6 +35,16 @@ def _configuration() -> tuple[str, str, Path]:
     return base_url, origin, output_root
 
 
+def _remember_material_root(root: Path) -> None:
+    """把自动探测到的素材根目录记下来，WebUI 里能看到实际用了哪一块盘。"""
+    with transaction() as connection:
+        connection.execute(
+            "INSERT INTO settings(key, value) VALUES ('workbench_material_root', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (str(root),),
+        )
+
+
 def _set_task_state(task_id: str, status: str, stage: str, progress: int, error: str = "") -> None:
     with transaction() as connection:
         connection.execute(
@@ -150,12 +160,39 @@ def workbench_status() -> dict:
         }
 
 
-def _prepare_source(task: dict) -> Path:
-    source_dir = Path(task["source_video_path"]).parent / "workbench_source"
-    source_dir.mkdir(parents=True, exist_ok=True)
+def _material_root(client: "WorkbenchClient") -> Path:
+    """工作台只接受位于授权 NAS 根目录内的素材/输出路径。
+
+    优先用手工配置的 workbench_material_root；没配就向工作台要 /api/roots，
+    挑第一个本机真实存在的根目录，把素材镜像进去，而不是去改对方配置。
+    """
+    configured = (get_settings().get("workbench_material_root") or "").strip()
+    if configured:
+        root = Path(configured)
+        if root.is_dir():
+            return root
+        raise WorkbenchError(f"素材根目录不存在：{configured}")
+
+    try:
+        roots = client.get("/api/roots") or []
+    except Exception as error:
+        raise WorkbenchError(f"无法读取工作台授权目录：{error}") from error
+    for item in roots:
+        candidate = Path(str(item.get("path") or ""))
+        if candidate.is_dir():
+            return candidate
+    raise WorkbenchError(
+        "工作台的授权目录都不在本机可访问，请在系统设置里填写 workbench_material_root"
+    )
+
+
+def _prepare_source(task: dict, material_root: Path) -> Path:
     source_video = Path(task["source_video_path"])
     if not source_video.is_file():
         raise WorkbenchError("任务原始视频不存在")
+    # 工作台会递归扫描素材目录后再做视觉索引，所以按任务隔离一个子目录
+    source_dir = material_root / "ova-agent" / task["task_no"] / "source"
+    source_dir.mkdir(parents=True, exist_ok=True)
     target = source_dir / source_video.name
     if not target.exists():
         try:
@@ -240,12 +277,15 @@ def render_task(task_id: str) -> None:
     with RENDER_LOCK:
         try:
             _set_task_state(task_id, "processing", "正在准备素材", 5)
-            base_url, origin, output_root = _configuration()
+            base_url, origin, _ = _configuration()
             client = WorkbenchClient(base_url, origin)
             try:
-                source_dir = _prepare_source(task)
-                output_dir = output_root / task["task_no"]
+                material_root = _material_root(client)
+                source_dir = _prepare_source(task, material_root)
+                # 输出目录同样要在授权根目录内，否则工作台会 400
+                output_dir = material_root / "ova-agent" / task["task_no"] / "output"
                 output_dir.mkdir(parents=True, exist_ok=True)
+                _remember_material_root(material_root)
                 _set_task_state(task_id, "processing", "正在创建视频项目", 10)
                 product = client.create_product(f"{task['task_no']} {task['source']}")
                 product_id = product["id"]

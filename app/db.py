@@ -155,6 +155,7 @@ DEFAULT_SETTINGS = {
     "workbench_output_root": os.getenv(
         "WORKBENCH_OUTPUT_ROOT", str(DATA_DIR / "workbench_outputs")
     ),
+    "workbench_material_root": os.getenv("WORKBENCH_MATERIAL_ROOT", ""),
     "public_base_url": os.getenv("OVA_PUBLIC_URL", ""),
     "feishu_auto_render": os.getenv("FEISHU_AUTO_RENDER", "0"),
 }

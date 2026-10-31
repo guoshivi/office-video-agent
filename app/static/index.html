@@ -111,6 +111,7 @@
               <label>默认声音<select name="default_voice"><option value="female_warm">温暖女声</option><option value="male_professional">专业男声</option></select></label>
               <label>视频工作台 API 地址<input name="workbench_url" placeholder="http://192.168.x.x:8765"></label>
               <label>工作台输出目录<input name="workbench_output_root" placeholder="data/workbench_outputs"></label>
+              <label>工作台授权素材根目录<input name="workbench_material_root" placeholder="留空则自动探测，例如 D://素材//一条根素材"><small>工作台只接受授权 NAS 根目录内的素材与输出，留空时自动读取工作台的 /api/roots。</small></label>
               <button class="button button-primary" type="submit">保存设置</button>
             </form>
             <div class="settings-side">
