@@ -1,6 +1,8 @@
 import json
 import os
 import sqlite3
+import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +16,9 @@ DATA_DIR = (_data_setting if _data_setting.is_absolute() else BASE_DIR / _data_s
 DB_PATH = DATA_DIR / "office_video_agent.db"
 UPLOAD_DIR = DATA_DIR / "uploads"
 EXPORT_DIR = DATA_DIR / "exports"
+FEISHU_DIR = DATA_DIR / "feishu"
+
+_WRITE_LOCK = threading.RLock()
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -107,6 +112,28 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS feishu_sessions (
+    chat_id TEXT PRIMARY KEY,
+    pending_message_id TEXT NOT NULL DEFAULT '',
+    pending_video_path TEXT NOT NULL DEFAULT '',
+    pending_filename TEXT NOT NULL DEFAULT '',
+    pending_size INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS feishu_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id TEXT NOT NULL DEFAULT '',
+    chat_id TEXT NOT NULL DEFAULT '',
+    msg_type TEXT NOT NULL DEFAULT '',
+    user_text TEXT NOT NULL DEFAULT '',
+    action TEXT NOT NULL DEFAULT '',
+    result TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_feishu_events_chat ON feishu_events(chat_id);
+
 CREATE TABLE IF NOT EXISTS property_embeddings (
     property_id TEXT PRIMARY KEY REFERENCES properties(id) ON DELETE CASCADE,
     model TEXT NOT NULL,
@@ -128,6 +155,8 @@ DEFAULT_SETTINGS = {
     "workbench_output_root": os.getenv(
         "WORKBENCH_OUTPUT_ROOT", str(DATA_DIR / "workbench_outputs")
     ),
+    "public_base_url": os.getenv("OVA_PUBLIC_URL", ""),
+    "feishu_auto_render": os.getenv("FEISHU_AUTO_RENDER", "0"),
 }
 
 
@@ -139,20 +168,45 @@ def connect() -> sqlite3.Connection:
     connection = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys=ON")
+    # 飞书长连接和 WebUI 会同时写库，给 SQLite 一点等待时间而不是直接报 locked
+    connection.execute("PRAGMA busy_timeout=8000")
     return connection
 
 
 @contextmanager
 def transaction():
-    connection = connect()
-    try:
-        yield connection
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
+    """进程内串行化的数据库事务。
+
+    飞书长连接、出片线程和 WebUI 会同时访问 SQLite。Windows 下 WAL 模式
+    并发写偶发 "attempt to write a readonly database"，所以这里用一个可重入
+    锁把写入串起来；访问量是单机中介场景，串行的代价可以忽略。
+    """
+    with _WRITE_LOCK:
+        connection = connect()
+        try:
+            yield connection
+            _commit_with_retry(connection)
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+
+def _commit_with_retry(connection: sqlite3.Connection, attempts: int = 3) -> None:
+    for attempt in range(attempts):
+        try:
+            connection.commit()
+            return
+        except sqlite3.OperationalError as error:
+            if attempt == attempts - 1 or not _retryable(error):
+                raise
+            time.sleep(0.2 * (attempt + 1))
+
+
+def _retryable(error: sqlite3.OperationalError) -> bool:
+    message = str(error).lower()
+    return "locked" in message or "readonly" in message or "busy" in message
 
 
 def _ensure_column(connection, table: str, column: str, definition: str) -> None:
@@ -164,12 +218,13 @@ def _ensure_column(connection, table: str, column: str, definition: str) -> None
 
 
 def init_db() -> None:
-    for directory in (DATA_DIR, UPLOAD_DIR, EXPORT_DIR):
+    for directory in (DATA_DIR, UPLOAD_DIR, EXPORT_DIR, FEISHU_DIR):
         directory.mkdir(parents=True, exist_ok=True)
     with transaction() as connection:
         connection.executescript(SCHEMA)
         _ensure_column(connection, "tasks", "stage", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(connection, "tasks", "progress", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(connection, "tasks", "notify_chat_id", "TEXT NOT NULL DEFAULT ''")
         for key, value in DEFAULT_SETTINGS.items():
             connection.execute(
                 "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",

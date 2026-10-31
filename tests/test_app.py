@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 from pathlib import Path
 
-os.environ["OVA_DATA_DIR"] = tempfile.mkdtemp(prefix="office-video-agent-test-")
+os.environ.setdefault("OVA_DATA_DIR", tempfile.mkdtemp(prefix="office-video-agent-test-"))
 
 from fastapi.testclient import TestClient
 from openpyxl import Workbook

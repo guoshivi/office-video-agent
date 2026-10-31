@@ -2,9 +2,14 @@ import json
 import random
 import re
 import string
+import uuid
 from datetime import datetime
 
 from .db import EXPORT_DIR, get_settings, json_dumps, transaction, utc_now
+
+TASK_SELECT = """t.*, p.region_norm, p.building_norm, p.room_norm,
+    p.area_raw, p.area_sqm, p.rent_raw, p.partition_raw, p.orientation_raw,
+    p.furnishing_layout_raw, p.status AS property_status"""
 
 SENSITIVE_PATTERN = re.compile(r"密码|门禁|钥匙|佣金|中介费|底价|红包|电话|手机|微信|议价", re.I)
 
@@ -78,12 +83,121 @@ def new_task_no() -> str:
     return f"V{datetime.now():%Y%m%d}-{suffix}"
 
 
+def create_task_record(
+    *,
+    property_row,
+    video_path,
+    original_filename: str,
+    target_duration: int = 45,
+    aspect_ratio: str = "9:16",
+    voice: str = "female_warm",
+    style: str = "professional",
+    source: str = "webui",
+    notify_chat_id: str = "",
+    task_no: str = "",
+) -> str:
+    """WebUI 与飞书共用的唯一建任务入口，避免两个入口各写一套状态机。"""
+    script, warnings = generate_script(property_row)
+    task_id = str(uuid.uuid4())
+    now = utc_now()
+    with transaction() as connection:
+        connection.execute(
+            """INSERT INTO tasks(
+                id, task_no, property_id, source, original_filename, source_video_path,
+                target_duration, aspect_ratio, voice, style, script, warnings_json,
+                status, notify_chat_id, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'script_ready', ?, ?, ?)""",
+            (
+                task_id, task_no or new_task_no(), property_row["id"], source,
+                original_filename, str(video_path), target_duration, aspect_ratio,
+                voice, style, script, json_dumps(warnings), notify_chat_id, now, now,
+            ),
+        )
+    return task_id
+
+
+def set_task_script(task_id: str, script: str) -> bool:
+    script = script.strip()
+    if not script:
+        return False
+    with transaction() as connection:
+        cursor = connection.execute(
+            """UPDATE tasks SET script=?, status='script_ready',
+               workbench_package_path='', updated_at=? WHERE id=?""",
+            (script, utc_now(), task_id),
+        )
+        return cursor.rowcount > 0
+
+
+def find_task_by_no(task_no: str):
+    with transaction() as connection:
+        return connection.execute(
+            f"""SELECT {TASK_SELECT} FROM tasks t JOIN properties p ON p.id=t.property_id
+               WHERE UPPER(t.task_no)=UPPER(?)""",
+            (task_no.strip(),),
+        ).fetchone()
+
+
+STATUS_LABELS = {
+    "received": "已接收",
+    "script_ready": "口播待确认",
+    "exported": "已导出任务包",
+    "processing": "出片中",
+    "review": "待审片",
+    "completed": "已完成",
+    "failed": "失败",
+}
+
+
+def _property_line(row) -> str:
+    parts = [row["region_norm"], row["building_norm"], row["room_norm"]]
+    label = " ".join(part for part in parts if part) or "未命名房源"
+    extras = [
+        value for value in (
+            f"{row['area_raw']}" if row["area_raw"] else "",
+            row["partition_raw"],
+            f"朝{row['orientation_raw']}" if row["orientation_raw"] else "",
+            row["furnishing_layout_raw"],
+        ) if value
+    ]
+    return f"{label}\n{'｜'.join(extras)}" if extras else label
+
+
+def format_task_message(task, settings: dict, brief: bool = False) -> str:
+    """给飞书用的纯文本卡片，尽量一行一个信息，手机上好读。"""
+    label = STATUS_LABELS.get(task["status"], task["status"])
+    progress = int(task["progress"] or 0)
+    header = f"{task['task_no']} · {label}"
+    lines = [header, _property_line(task)]
+
+    if brief:
+        if task["stage"]:
+            lines.append(f"进度：{progress}% {task['stage']}")
+        if task["error_message"]:
+            lines.append(f"原因：{task['error_message']}")
+        if task["output_video_path"]:
+            lines.append(f"成片：{task['output_video_path']}")
+        lines.append(f"口播：{task['script']}")
+        return "\n".join(lines)
+
+    lines.append("")
+    lines.append("口播草稿：")
+    lines.append(f"「{task['script']}」")
+    warnings = json.loads(task["warnings_json"] or "[]")
+    if warnings:
+        lines.append("")
+        lines.append("注意：" + warnings[0])
+    lines.append("")
+    lines.append(f"回复「出片 {task['task_no']}」开始生成")
+    lines.append(f"回复「改口播 {task['task_no']} 新文案」修改口播")
+    lines.append(f"回复「状态 {task['task_no']}」查看进度")
+    return "\n".join(lines)
+
+
 def get_task(task_id: str):
     with transaction() as connection:
         row = connection.execute(
-            """SELECT t.*, p.region_norm, p.building_norm, p.room_norm,
-                      p.area_raw, p.rent_raw, p.status AS property_status
-               FROM tasks t JOIN properties p ON p.id=t.property_id
+            f"""SELECT {TASK_SELECT} FROM tasks t JOIN properties p ON p.id=t.property_id
                WHERE t.id=?""",
             (task_id,),
         ).fetchone()
