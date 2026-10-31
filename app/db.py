@@ -162,6 +162,30 @@ CREATE TABLE IF NOT EXISTS channel_clips (
 
 CREATE INDEX IF NOT EXISTS idx_channel_clips_lookup
     ON channel_clips(channel, sender, status, created_at);
+
+-- 每条成片在每个平台最多一条记录：重试走更新，不新建，
+-- 避免同一条视频被重复推到同一个平台。
+CREATE TABLE IF NOT EXISTS publish_records (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    platform TEXT NOT NULL,                   -- xiaohongshu | douyin
+    status TEXT NOT NULL DEFAULT 'pending',   -- pending|publishing|published|uncertain|failed
+    title TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL DEFAULT '',
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    video_path TEXT NOT NULL DEFAULT '',
+    remote_id TEXT NOT NULL DEFAULT '',
+    remote_url TEXT NOT NULL DEFAULT '',
+    message TEXT NOT NULL DEFAULT '',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_publish_records_task_platform
+    ON publish_records(task_id, platform);
+CREATE INDEX IF NOT EXISTS idx_publish_records_platform_time
+    ON publish_records(platform, created_at);
 """
 
 DEFAULT_SETTINGS = {
@@ -187,6 +211,18 @@ DEFAULT_SETTINGS = {
     "render_flower": os.getenv("OVA_RENDER_FLOWER", "0"),
     "render_sfx": os.getenv("OVA_RENDER_SFX", "0"),
     "render_sentence_gap": os.getenv("OVA_RENDER_SENTENCE_GAP", "0.22"),
+    # ---- 发布 ----
+    # 两个平台默认都关：发布是破坏性动作，必须人工先确认账号和环境就绪再打开。
+    "publish_xhs_enabled": os.getenv("PUBLISH_XHS_ENABLED", "0"),
+    "publish_douyin_enabled": os.getenv("PUBLISH_DOUYIN_ENABLED", "0"),
+    "publish_xhs_mcp_url": os.getenv("PUBLISH_XHS_MCP_URL", "http://127.0.0.1:18060/mcp"),
+    "publish_xhs_token": os.getenv("PUBLISH_XHS_TOKEN", ""),
+    "publish_douyin_cdp_url": os.getenv("PUBLISH_DOUYIN_CDP_URL", "http://127.0.0.1:9222"),
+    # 中介号不是矩阵号，宁可少发也别进风控
+    "publish_daily_limit": os.getenv("PUBLISH_DAILY_LIMIT", "3"),
+    "publish_min_interval_minutes": os.getenv("PUBLISH_MIN_INTERVAL_MINUTES", "60"),
+    # 审核通过后是否自动发；默认关，等审核台跑顺了再打开
+    "publish_auto_after_review": os.getenv("PUBLISH_AUTO_AFTER_REVIEW", "0"),
 }
 
 
