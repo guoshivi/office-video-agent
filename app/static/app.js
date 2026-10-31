@@ -443,12 +443,26 @@ async function decideReview(action) {
 
 /* ------------------------------------------------------------------ 发布 */
 
+function cleanPlatformMessage(message) {
+  // 平台返回的提示是给机器/命令行看的，常带 ❌✅ 和换行；卡片上只留一句人话
+  const flat = (message || "").replace(/\s+/g, " ").trim().replace(/^[❌✅⚠]+\s*/, "");
+  return flat.length > 88 ? `${flat.slice(0, 88)}…` : flat;
+}
+
 function platformCard(key, info) {
   const label = key === "xiaohongshu" ? "小红书" : "抖音";
   const avatar = key === "xiaohongshu" ? "小红" : "抖音";
   const avatarClass = key === "xiaohongshu" ? "xhs" : "dy";
   const online = info.reachable && info.logged_in;
+  // 「没打开开关」和「打开了但连不上」是两件事：
+  // 副标题永远说运行状态（服务没启动 / 未登录 / 已登录），
+  // 右上角的灯才说开关。混在一起会让人以为"服务挂了"，白排查一轮。
   const stateText = !info.reachable ? "服务没启动" : info.logged_in ? "已登录" : "未登录";
+  const pill = !info.enabled
+    ? { text: "未启用", cls: "neutral" }
+    : online ? { text: "就绪", cls: "active" }
+      : info.reachable ? { text: "待登录", cls: "needs_review" }
+        : { text: "不可用", cls: "failed" };
   const quota = info.quota || {};
 
   // 抖音的完整命令有四五十个字符，直接铺在卡片里会撑成三行。
@@ -463,13 +477,13 @@ function platformCard(key, info) {
       <div class="platform-top">
         <div class="platform-avatar ${avatarClass}">${avatar}</div>
         <div><h4>${label}</h4><small>${escapeHtml(stateText)}</small></div>
-        <span class="status-pill ${online ? "active" : info.reachable ? "needs_review" : "failed"}" style="margin-left:auto">${online ? "就绪" : "不可用"}</span>
+        <span class="status-pill ${pill.cls}" style="margin-left:auto">${pill.text}</span>
       </div>
       <div class="platform-rows">
         <div class="platform-row"><span>今日额度</span><span>${quota.used_today ?? 0} / ${quota.daily_limit ?? "—"}</span></div>
         <div class="platform-row"><span>最小间隔</span><span>${escapeHtml(String(state.settings.publish_min_interval_minutes || "—"))} 分钟</span></div>
         ${hint}
-        <div class="platform-row"><span>说明</span><span class="note">${escapeHtml((info.message || "").slice(0, 120))}</span></div>
+        <div class="platform-row"><span>说明</span><span class="note">${escapeHtml(cleanPlatformMessage(info.message))}</span></div>
       </div>
       <div class="platform-actions">
         ${key === "xiaohongshu"
