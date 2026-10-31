@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 
 from .db import EXPORT_DIR, get_settings, json_dumps, transaction, utc_now
+from .hygiene import clean_internal_sentences
 
 TASK_SELECT = """t.*, p.region_norm, p.building_norm, p.room_norm,
     p.area_raw, p.area_sqm, p.rent_raw, p.partition_raw, p.orientation_raw,
@@ -287,7 +288,12 @@ def export_workbench_package(task_id: str) -> dict:
     package_dir.mkdir(parents=True, exist_ok=True)
     script_path = package_dir / "script.txt"
     manifest_path = package_dir / "task.json"
-    script_path.write_text(task["script"], encoding="utf-8")
+    # 导出的包会被别的出片工具直接拿去配音，所以内部提醒句在这里也摘一次
+    export_script, removed = clean_internal_sentences(task["script"])
+    script_path.write_text(export_script, encoding="utf-8")
+    warnings = json.loads(task["warnings_json"] or "[]")
+    if removed:
+        warnings.append(f"导出时摘掉了 {len(removed)} 句内部用语：{'；'.join(removed)[:200]}")
     manifest = {
         "schema_version": 1,
         "task_id": task["id"],
@@ -303,7 +309,7 @@ def export_workbench_package(task_id: str) -> dict:
             "style": task["style"],
         },
         "script_file": str(script_path),
-        "warnings": json.loads(task["warnings_json"] or "[]"),
+        "warnings": warnings,
         "configured_workbench_path": settings.get("workbench_path", ""),
         "note": "This is an export package, not a rendered video. Connect the existing workbench adapter to process it.",
     }

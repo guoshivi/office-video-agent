@@ -64,7 +64,33 @@
 `cn_to_int()` 负责这层转换，并且专门处理了省略说法（「一万二」= 12000，不是 10000）。
 金额比对留 5% 容差，因为中介口头常说「一万二左右」。
 
-## 三、队列与状态机
+## 三、出片前就摘掉，别等审
+
+`hygiene` 那条规则如果只在审核时生效，会有一个很贵的问题：
+出错的是**已经渲染好的成片**，修一次要重跑十几分钟，当天大概率发不出去。
+
+所以同一个词表（`app/hygiene.py`）在两个时机各用一次：
+
+| 时机 | 位置 | 动作 |
+|---|---|---|
+| 出片前 | `workbench_client._render_once()` | 送进配音之前把带内部用语的整句摘掉，并记一条 warning |
+| 导出任务包时 | `services.export_workbench_package()` | 写 `script.txt` 前摘一次，warning 写进 manifest |
+| 审核时 | `precheck._check_hygiene()` | 成片对应的文案里还有，就 blocking |
+
+只摘整句，不改写剩下的内容——改写会把「一百二十平」这种事实也一起动了。
+如果整段都带内部用语（摘完什么都不剩），原样返回：
+让工作台出一条有瑕疵的片子（审核台还会拦），也好过把空文案送进配音直接报错。
+
+真实效果：
+
+```
+原文：正在找办公室的朋友，今天看一套位于F区、F14的房源。面积信息为120平，
+      格局为店面，朝向向南。租金和物业费口径请以最新房源确认为准。欢迎私信咨询。
+清理：正在找办公室的朋友，今天看一套位于F区、F14的房源。面积信息为120平，
+      格局为店面，朝向向南。欢迎私信咨询。
+```
+
+## 四、队列与状态机
 
 `app/review/store.py` 只负责存取，`app/review/service.py` 负责编排。
 这条分界很硬：**存储层不许知道「通过之后要不要发」**，否则换发布实现要动数据库代码。
@@ -91,7 +117,7 @@ pending ──approve──> approved ──publish_now──> published
 - **不硬插在出片流程里。** `refresh_queue()` 用查询补齐「已出片但未入队」的任务，
   而不是在出片线程里加一步。理由是出片线程已经很忙，而且历史上已经出好的片子也要能补进来。
 
-## 四、多维表格桥接
+## 五、多维表格桥接
 
 `app/review/bitable_bridge.py`。**本地 SQLite 始终是权威，表格只是它的一个视图。**
 
@@ -121,7 +147,7 @@ pending ──approve──> approved ──publish_now──> published
 开关是 `REVIEW_BITABLE_SYNC=1`，同时需要 `FEISHU_BASE_APP_TOKEN` 和 `FEISHU_TASK_TABLE_ID`。
 写表走 REST + `tenant_access_token`，**不订阅事件**，所以不会和 WorkBuddy 的飞书长连接抢消息。
 
-## 五、怎么用
+## 六、怎么用
 
 ### WebUI
 
@@ -166,7 +192,7 @@ pending ──approve──> approved ──publish_now──> published
 | POST | `/api/review/bitable/push` | 推送队列（`?task_id=` 推单条） |
 | POST | `/api/review/bitable/pull` | 拉一次人工裁决 |
 
-## 六、和发布的关系
+## 七、和发布的关系
 
 审核通过后发不发，由 `PUBLISH_AUTO_AFTER_REVIEW` 决定：
 
@@ -179,7 +205,7 @@ pending ──approve──> approved ──publish_now──> published
 
 具体的平台行为、踩过的坑见 [publish.md](publish.md)。
 
-## 七、已知边界
+## 八、已知边界
 
 - **预检不懂语义。** 它只会比数字和查词表。「这套采光特别好」是不是吹牛，它不知道。
 - **串房检测依赖房源库里的楼栋名。** 文案里用了简称（「深港」而不是「深港大厦」）可能漏检。
