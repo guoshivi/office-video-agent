@@ -9,6 +9,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import __version__
+from .channel import (
+    ChannelError,
+    bind_clip,
+    drop_clip,
+    list_clips,
+    resolve as resolve_channel_property,
+    save_clip,
+)
 from .db import DATA_DIR, UPLOAD_DIR, get_settings, init_db, transaction, utc_now
 from .excel_import import import_excel
 from .feishu.bot import get_bot, start_bot
@@ -395,6 +403,74 @@ def data_info():
         "data_directory": str(DATA_DIR),
         "note": "数据库、上传视频、成片和工作台输出均保存在本地；迁移时需要备份整个 data 目录。",
     }
+
+
+# ------------------------------------------------------------------ 多入口收片
+# WorkBuddy 桌面、IM 机器人、任何脚本都通过这三个接口喂料，业务逻辑只有一份。
+
+class ClipBind(BaseModel):
+    query: str = Field(default="", max_length=200)
+    property_id: str = Field(default="", max_length=64)
+    target_duration: int = Field(default=45, ge=10, le=180)
+    aspect_ratio: str = "9:16"
+    voice: str = Field(default="female_warm", max_length=40)
+    style: str = Field(default="professional", max_length=40)
+
+
+@app.post("/api/channel/clips")
+def upload_clip(
+    video: UploadFile = File(...),
+    channel: str = Form(default="desktop"),
+    sender: str = Form(default=""),
+):
+    try:
+        clip = save_clip(video.filename or "source.mp4", video.file, channel=channel, sender=sender)
+    except ChannelError as error:
+        raise HTTPException(400, str(error)) from error
+    megabytes = round(clip["size"] / 1024 / 1024, 1)
+    return {
+        "clip": clip,
+        "hint": f"已收到视频（{megabytes} MB），请回复房源，例如：A区 中关村大厦 1201",
+    }
+
+
+@app.get("/api/channel/clips")
+def get_clips(
+    channel: str = "",
+    status: str = "",
+    limit: int = Query(default=20, ge=1, le=200),
+):
+    return {"items": list_clips(channel, status, limit)}
+
+
+@app.get("/api/channel/resolve")
+def resolve_property_query(q: str = Query(min_length=1, max_length=200), limit: int = Query(default=5, ge=1, le=20)):
+    return resolve_channel_property(q.strip(), limit)
+
+
+@app.post("/api/channel/clips/{clip_id}/bind")
+def bind_clip_to_property(clip_id: str, payload: ClipBind):
+    if payload.aspect_ratio not in {"9:16", "16:9"}:
+        raise HTTPException(400, "当前视频工作台支持 9:16 或 16:9")
+    try:
+        return bind_clip(
+            clip_id,
+            query=payload.query,
+            property_id=payload.property_id,
+            target_duration=payload.target_duration,
+            aspect_ratio=payload.aspect_ratio,
+            voice=payload.voice,
+            style=payload.style,
+        )
+    except ChannelError as error:
+        raise HTTPException(400, str(error)) from error
+
+
+@app.delete("/api/channel/clips/{clip_id}")
+def discard_clip(clip_id: str):
+    if not drop_clip(clip_id):
+        raise HTTPException(404, "视频不存在")
+    return {"dropped": True, "clip_id": clip_id}
 
 
 @app.get("/api/feishu/status")

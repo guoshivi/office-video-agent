@@ -1,11 +1,82 @@
-# 飞书接入步骤
+# 接入飞书
 
-本项目用**企业自建应用 + 长连接**接收飞书消息，不依赖公网 IP、不需要内网穿透。
+有两种用法，**业务能力完全一样**（同一个任务服务、同一套口播与出片逻辑），
+区别只在「谁去收消息」：
 
-> 注意：WorkBuddy 自己也能「接入飞书」，那是让你在飞书里跟 WorkBuddy 对话。
-> 本项目需要的是**朋友电脑上独立运行的机器人**，必须有自己的应用凭据。
-> 如果两个用途共用一个应用，飞书会把同一条消息随机派给其中一条长连接，事件会丢一半，
-> 所以建议单独建一个应用。
+| | 方案 A：WorkBuddy 通道 | 方案 B：独立机器人 |
+| --- | --- | --- |
+| 要不要建企业自建应用 | 不用 | 要 |
+| 电脑上必须开着什么 | WorkBuddy | 只要本服务在跑 |
+| 谁在飞书里回话 | WorkBuddy 里的 Agent | 项目自带的 `app/feishu` |
+| 上手成本 | 几步就能用 | 建应用 + 开权限 + 发布审核 |
+| 适合 | 先在朋友电脑上跑通、自己用 | 正式交付，无人值守 |
+
+---
+
+## 方案 A：WorkBuddy 飞书通道（推荐先走这条）
+
+WorkBuddy 已经把他的飞书接好了，那就**不再单独建机器人**：
+飞书里的消息由 WorkBuddy 的 Agent 接住，Agent 调本地服务干活，再把结果回给你。
+
+### 为什么这样做不会重复实现
+
+所有入口（WebUI 上传、WorkBuddy 桌面、飞书、以后的微信）都收敛到同一组接口：
+
+```
+POST /api/channel/clips                 收下视频，先存着
+POST /api/channel/clips/{id}/bind       说房源，绑定并生成口播
+POST /api/tasks/{id}/render             出片
+GET  /api/tasks/{id}                    看进度
+```
+
+「先发视频、过一会儿才说房号」这种真实节奏，靠 `channel_clips` 这张表兜住：
+视频先落进 `data/inbox/`，房源确认后才建任务，中间不会丢素材。
+
+### 对话怎么走
+
+在飞书里（或直接在这台电脑的 WorkBuddy 里）说：
+
+| 你说 | 背后发生什么 |
+| --- | --- |
+| 发一段办公室视频 | `ova send` 落盘，回复「已收到，请回复房源」 |
+| `A区 中关村大厦 1201` | `ova bind` 精确匹配 → 建任务 → 回任务号 + 口播草稿 |
+| `102`（只报房号且重号） | 回 3 个候选让你选，选完再绑定 |
+| `改口播 开头别提面积` | `ova script --set` 覆盖草稿 |
+| `出片` | `ova render --wait`，3–6 分钟后回成片路径 |
+
+命令行工具就是 `tools/ova.py`，WorkBuddy 侧的技能文件在
+`D:\luo\.workbuddy\skills\office-video-channel\SKILL.md`，它规定了
+「歧义必须让人选、出片前先确认口播」这些不能越过的规则。
+
+### 前提条件
+
+1. 本服务在跑：`start.bat`，默认 <http://127.0.0.1:8770>。
+2. 朋友电脑上装了 WorkBuddy 并登录，而且**开着**。这是方案 A 唯一的硬约束——
+   它没有常驻进程托管，WorkBuddy 关了，飞书那边就没人接。
+3. 视频工作台可访问（`/api/workbench/status` 里 `online: true`）。
+
+一旦你希望「关掉 WorkBuddy 也能收消息」，再走方案 B，代码已经写好了，
+只差把应用凭据填进 `.env`。
+
+### 自己先验一遍
+
+```bash
+cd /d/luo/office-video-agent
+.venv/Scripts/python.exe tools/ova.py status
+.venv/Scripts/python.exe tools/ova.py send  D:\某段实拍.mp4
+.venv/Scripts/python.exe tools/ova.py bind  "F区 F14 202-2"
+.venv/Scripts/python.exe tools/ova.py render V20261101-ABCDE --wait
+```
+
+---
+
+## 方案 B：独立机器人
+
+用**企业自建应用 + 长连接**接收飞书消息，不依赖公网 IP、不需要内网穿透。
+下面的「一」到「十」都是这个方案。
+
+> 如果两个用途共用一个应用，飞书会把同一条消息随机派给其中一条长连接，
+> 事件会丢一半，所以方案 B 必须单独建应用。
 
 ## 一、创建应用（3 分钟）
 

@@ -25,6 +25,8 @@ def sample_workbook() -> bytes:
     sheet.append(["A区", "A01", "101", "100平", "2隔", "40", "朝北", "带家具", "内部备注", "内部联系人", "10月1日"])
     sheet.append([None, None, "102", "120平", "3隔", "1400/月", "朝南", "带家具", "钥匙在管理处", "内部联系人", "10月2日"])
     sheet.append([None, None, "102", "120平", "3隔", "1400/月", "朝南", "带家具", "钥匙在管理处", "内部联系人", "10月2日"])
+    # 房号带横杆是真实数据里的主流写法（520/809 条），解析不能被 "-" 拆断
+    sheet.append([None, None, "202-2", "88平", "1隔", "58", "朝北", "带家具", "", "", "10月3日"])
     output = BytesIO()
     workbook.save(output)
     return output.getvalue()
@@ -65,6 +67,7 @@ def prepare() -> FakeClient:
         connection.execute("DELETE FROM feishu_events")
         connection.execute("DELETE FROM property_versions")
         connection.execute("DELETE FROM property_embeddings")
+        connection.execute("DELETE FROM channel_clips")
         connection.execute("DELETE FROM properties")
     import_excel(sample_workbook(), "test-listings.xlsx")
     return FakeClient()
@@ -120,6 +123,20 @@ def test_resolve_property_fuzzy_and_ambiguous():
     assert len(ambiguous.candidates) == 2
 
     assert resolve_property("B区 99号楼 999").kind == "none"
+
+
+def test_resolve_property_keeps_hyphenated_room():
+    prepare()
+    # 「202-2」不能被拆成 楼栋202 + 房号2
+    for query in ("A区 A01 202-2", "a区-a01-202-2", "A区A01202-2"):
+        result = resolve_property(query)
+        assert result.kind == "matched", query
+        assert result.property["room_norm"] == "202-2", query
+
+    # 只报房号时按「完全相等」找，不能把 1102 之类捞进来
+    result = resolve_property("102")
+    assert result.kind == "ambiguous"
+    assert {row["room_norm"] for row in result.candidates} == {"102"}
 
 
 def test_safe_filename():

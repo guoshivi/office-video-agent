@@ -143,6 +143,25 @@ CREATE TABLE IF NOT EXISTS property_embeddings (
 );
 
 CREATE INDEX IF NOT EXISTS idx_embeddings_model ON property_embeddings(model);
+
+-- 各入口（WebUI / WorkBuddy 桌面 / IM）收到的原始视频先落在待绑定区，
+-- 等房源确认后再建任务，这样“先发视频、后回房号”的对话节奏不会丢素材。
+CREATE TABLE IF NOT EXISTS channel_clips (
+    id TEXT PRIMARY KEY,
+    channel TEXT NOT NULL DEFAULT 'desktop',
+    sender TEXT NOT NULL DEFAULT '',
+    filename TEXT NOT NULL DEFAULT '',
+    stored_path TEXT NOT NULL DEFAULT '',
+    size INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending',   -- pending | bound | dropped
+    task_id TEXT NOT NULL DEFAULT '',
+    property_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_channel_clips_lookup
+    ON channel_clips(channel, sender, status, created_at);
 """
 
 DEFAULT_SETTINGS = {

@@ -14,7 +14,11 @@ from ..db import transaction
 # 全角转半角，统一分隔符与大小写，避免同一个房源被当成两条。
 _FULLWIDTH = {code: code - 0xFEE0 for code in range(0xFF01, 0xFF5F)}
 _FULLWIDTH[0x3000] = 0x20
-_SEPARATORS = re.compile(r"[\s\-_—/\\、,，;；|·.。:：()（）\[\]【】\"'“”]+")
+# 注意这里不含 "-"：房源里 520/809 条房号本身带横杆（202-2、1102-3），
+# 拆开就会变成「区/楼栋/数字」，指向完全不相干的房源。
+_SEPARATORS = re.compile(r"[\s_—/\\、,，;；|·.。:：()（）\[\]【】\"'“”]+")
+# 整串比对时把所有分隔符都抹掉，这样「A区-A01-101」「a区 a01 101」是同一个键。
+_SQUASH = re.compile(r"[\s\-_—/\\、,，;；|·.。:：()（）\[\]【】\"'“”]+")
 
 HELP_TEXT = """房源视频助手 · 可用指令
 
@@ -48,6 +52,11 @@ def key_part(value: str) -> str:
 def tokens_of(text: str) -> list[str]:
     cleaned = normalize(text)
     return [token for token in _SEPARATORS.split(cleaned) if token]
+
+
+def squash(value: str) -> str:
+    """抹掉所有分隔符并大写，用于整串房源键的等价比较。"""
+    return _SQUASH.sub("", normalize(value)).upper()
 
 
 @dataclass
@@ -131,6 +140,16 @@ def resolve_property(text: str, limit: int = 5) -> MatchResult:
     noise = {"视频", "这个", "那个", "拍", "一下", "房源", "的", "吧", "呢", "是"}
     core = [token for token in tokens if token not in noise] or tokens
 
+    # 第一层：整串键精确匹配。
+    # 「F区 F14 202-2」「f区-f14-202-2」「F区F14202-2」都应该落到同一条，
+    # 而且房号里的横杆不能被当成分隔符。
+    rows = _query_by_full_key(squash("".join(core)))
+    if len(rows) == 1:
+        return MatchResult("matched", property=rows[0])
+    if len(rows) > 1:
+        return MatchResult("ambiguous", candidates=rows[:limit])
+
+    # 第二层：猜 区/楼栋/房号 三段，只给两个词或一个词时逐步放宽。
     room = core[-1]
     building = core[-2] if len(core) >= 2 else ""
     region = core[-3] if len(core) >= 3 else ""
@@ -139,14 +158,24 @@ def resolve_property(text: str, limit: int = 5) -> MatchResult:
     if not rows and len(core) == 1:
         # 只给了一个词：可能是楼栋名，也可能是房号
         rows = _query("", "", core[0], fuzzy_all=True)
+    confident = True
     if not rows and building:
         # 区域写错或省略，退一步只用楼栋+房号
         rows = _query("", building, room)
     if not rows and len(core) >= 2:
+        # 最后只按房号兜底。命中可能只是「别的楼栋同号房」，
+        # 所以即使唯一也不直接认定，交回人工确认，避免报错地址。
         rows = _query("", "", room)
+        confident = False
 
     if len(rows) == 1:
-        return MatchResult("matched", property=rows[0])
+        if confident:
+            return MatchResult("matched", property=rows[0])
+        return MatchResult(
+            "ambiguous",
+            candidates=rows,
+            hint=f"只按房号匹配到一条：{describe_property(rows[0])}，请确认",
+        )
     if len(rows) > 1:
         exact = [row for row in rows if row["match_key"] and
                  row["match_key"] == "|".join(key_part(p) for p in (region, building, room))]
@@ -156,15 +185,39 @@ def resolve_property(text: str, limit: int = 5) -> MatchResult:
     return MatchResult("none", hint=f"没有找到「{text.strip()}」对应的房源")
 
 
+def _query_by_full_key(key: str) -> list:
+    """整串比对 match_key。表里只有几百行，逐行比 squash 值最不容易出错。"""
+    if not key:
+        return []
+    with transaction() as connection:
+        rows = connection.execute(
+            """SELECT * FROM properties
+               ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, source_sheet, source_row"""
+        ).fetchall()
+    return [row for row in rows if squash(row["match_key"]) == key]
+
+
 def _query(region: str, building: str, room: str, fuzzy_all: bool = False) -> list:
+    # 房号先按完全相等找，找不到再退回模糊：否则「102」会把「1102-2」也捞进来
+    rows = _query_with(region, building, room, fuzzy_all, exact_room=True)
+    if not rows:
+        rows = _query_with(region, building, room, fuzzy_all, exact_room=False)
+    return rows
+
+
+def _query_with(region: str, building: str, room: str, fuzzy_all: bool, exact_room: bool) -> list:
     clauses, params = ["room_norm <> ''"], []
+    room_value = normalize(room)
     if fuzzy_all:
-        keyword = f"%{normalize(room)}%"
+        keyword = f"%{room_value}%"
         clauses.append("(room_norm LIKE ? OR building_norm LIKE ?)")
         params.extend([keyword, keyword])
+    elif exact_room:
+        clauses.append("room_norm = ?")
+        params.append(room_value)
     else:
         clauses.append("room_norm LIKE ?")
-        params.append(f"%{normalize(room)}%")
+        params.append(f"%{room_value}%")
     if building:
         clauses.append("building_norm LIKE ?")
         params.append(f"%{normalize(building)}%")
