@@ -306,3 +306,46 @@ def test_bitable_field_text_handles_shapes():
     assert _field_text({"name": "老板"}) == "老板"
     assert _field_text(None) == ""
     assert _field_text(120) == "120"
+
+
+def test_bitable_search_all_pages_until_exhausted():
+    """表格里标成「通过」的记录超过一页时，第二页也必须拉到。
+
+    这是真实会踩的坑：FeishuClient.bitable_search 只取第一页 20 条，
+    审核裁决同步靠它的话，第 21 条记录永远同步不回来。
+    """
+    from app.feishu.client import FeishuConfig, FeishuClient
+
+    client = FeishuClient(FeishuConfig(app_id="x", app_secret="y", base_app_token="b", task_table_id="t"))
+    calls = []
+
+    def fake_request(method, path, *, json_body=None, params=None, timeout=30):
+        calls.append(params)
+        if len(calls) == 1:
+            return {"data": {"items": [{"record_id": "a"}], "page_token": "p2", "has_more": True}}
+        return {"data": {"items": [{"record_id": "b"}], "has_more": False}}
+
+    client._request = fake_request  # type: ignore[assignment]
+    items = client.bitable_search_all("tbl", "审核状态", "通过", page_size=1)
+
+    assert [item["record_id"] for item in items] == ["a", "b"]
+    assert "page_token" not in calls[0]
+    assert calls[1]["page_token"] == "p2"
+
+
+def test_bitable_search_all_stops_at_max_pages():
+    """表格出问题一直返回 has_more 时，靠 max_pages 兜住，不能把轮询线程卡死。"""
+    from app.feishu.client import FeishuConfig, FeishuClient
+
+    client = FeishuClient(FeishuConfig(app_id="x", app_secret="y", base_app_token="b", task_table_id="t"))
+    calls = []
+
+    def fake_request(method, path, *, json_body=None, params=None, timeout=30):
+        calls.append(1)
+        return {"data": {"items": [{"record_id": "a"}], "page_token": "same", "has_more": True}}
+
+    client._request = fake_request  # type: ignore[assignment]
+    items = client.bitable_search_all("tbl", "审核状态", "通过", max_pages=3)
+
+    assert len(items) == 3
+    assert len(calls) == 3

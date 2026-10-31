@@ -115,7 +115,7 @@ def push_all(limit: int = 50) -> dict:
     return result
 
 
-def pull_decisions(limit: int = 100) -> dict:
+def pull_decisions() -> dict:
     """把表格里被改过的审核状态同步回本地。
 
     只处理本地还是 pending 的记录——已经裁决过的不覆盖，
@@ -128,9 +128,11 @@ def pull_decisions(limit: int = 100) -> dict:
     table_id = client.config.task_table_id
     applied = {"available": True, "approved": 0, "rejected": 0, "skipped": 0}
     try:
-        records = client.bitable_search(table_id, FIELD_STATUS, "通过") + client.bitable_search(
-            table_id, FIELD_STATUS, "驳回"
-        )
+        records = [
+            record
+            for status in ("通过", "驳回")
+            for record in _records_with_status(client, table_id, status)
+        ]
     except Exception as error:  # noqa: BLE001
         logger.warning("读取多维表格失败：%s", error)
         return {"available": False, "approved": 0, "rejected": 0, "error": str(error)}
@@ -163,6 +165,18 @@ def pull_decisions(limit: int = 100) -> dict:
             logger.warning("应用表格裁决失败（%s）：%s", task_no, error)
             applied["skipped"] += 1
     return applied
+
+
+def _records_with_status(client, table_id: str, status: str) -> list[dict]:
+    """取某个审核状态下的**全部**记录。
+
+    优先用带翻页的 bitable_search_all：只取第一页 20 条的话，
+    表格里标成"通过"的记录一多，第 21 条之后就永远同步不回来了。
+    """
+    search_all = getattr(client, "bitable_search_all", None)
+    if search_all is not None:
+        return search_all(table_id, FIELD_STATUS, status)
+    return client.bitable_search(table_id, FIELD_STATUS, status)
 
 
 def _field_text(value) -> str:
