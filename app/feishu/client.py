@@ -113,6 +113,9 @@ class FeishuClient:
             )
         return _json_or_raise(response, f"调用 {path} 失败")
 
+    def get_json(self, path: str, params: dict | None = None) -> dict:
+        return self._request("GET", path, params=params)
+
     # ------------------------------------------------------------------ 消息
     def send_text(self, chat_id: str, text: str) -> dict:
         return self._request(
