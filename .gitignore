@@ -13,3 +13,8 @@ build/
 .DS_Store
 Thumbs.db
 .pytest-data/
+
+# 第三方发布二进制（14MB+）不进仓库，用 tools/fetch_publish_tools.py 拉取
+vendor/**/*.exe
+vendor/**/data/
+vendor/**/cookies.json

@@ -110,6 +110,28 @@ FEISHU_TASK_TABLE_ID=tblXXX
 表里需要一列「任务编号」，写入前按它查重、有则更新。
 手动同步：`POST /api/tasks/{id}/sync-bitable`。
 
+## 发布到小红书 / 抖音
+
+出片之后可以直接推到平台。两个平台走的路不一样：
+
+- **小红书**：复用开源服务 [xiaohongshu-mcp](https://github.com/xpzouying/xiaohongshu-mcp)
+  （本地 18060 端口），我们只调它的 `publish_with_video`；
+- **抖音**：用 CDP 附加到**你日常在用的 Chrome**，操作创作者中心上传页。
+  不是新起无头浏览器——抖音对设备指纹更敏感，"借真人"比"伪装真人"活得久。
+
+发布前会先过一遍规则（`app/publish/policy.py`）：标题 20 字上限、
+正文 1000 字上限、微信号/手机号直接拦、绝对化用语给警告、每日发帖量和
+最小间隔限流。**默认两个平台都是关闭的**，确认账号环境就绪再打开。
+
+完整说明和踩过的坑：见 [docs/publish.md](docs/publish.md)。
+
+```bash
+python tools/fetch_publish_tools.py          # 拉取发布服务（二进制不进仓库）
+vendor\xhs-mcp\xiaohongshu-mcp.exe -port :18060
+```
+
+状态：`GET /api/publish/status`；发布：`POST /api/tasks/{id}/publish`。
+
 ## 目录
 
 ```
@@ -121,14 +143,17 @@ app/
   excel_import.py    房源 Excel 导入（保留原始行与颜色标记）
   semantic.py        向量 + 规则混合检索
   workbench_client.py 视频工作台适配（建项目/索引/出片/回传）
+  publish/           发布到小红书（MCP）/ 抖音（CDP）：policy / mcp_client / xhs / douyin
   feishu/            独立机器人（方案 B）：client / intents / handlers / bitable / bot
   static/            无构建链的原生前端
 tools/
   ova.py             命令行入口（send/bind/analyze/storyboard/render）
   vision_probe.py    验证多模态向量模型确实能编码画面
   feishu_check.py    飞书凭据自检，逐步定位缺哪个权限
+  fetch_publish_tools.py 拉取发布用的第三方二进制
 data/                数据库、上传视频、成片、导出包（不进 Git）
 docs/feishu-setup.md 飞书两种接法的完整步骤
+docs/publish.md      发布链路、平台差异、已验证项与踩过的坑
 ```
 
 ## 迁移到另一台电脑
