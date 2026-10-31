@@ -62,7 +62,24 @@ async def lifespan(_: FastAPI):
         start_bot()
     except Exception:
         logger.exception("飞书机器人启动失败")
+
+    # 多维表格裁决轮询：受 review_bitable_sync 控制，没开就什么都不做
+    try:
+        from .review import bitable_bridge
+
+        if not bitable_bridge.start_watcher():
+            logger.info("多维表格审核轮询未启用（review_bitable_sync 未打开）")
+    except Exception:
+        logger.exception("多维表格审核轮询启动失败")
+
     yield
+
+    try:
+        from .review import bitable_bridge
+
+        bitable_bridge.stop_watcher()
+    except Exception:
+        pass
     try:
         get_bot().stop()
     except Exception:
@@ -70,6 +87,14 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="房源视频工作台", version=__version__, lifespan=lifespan)
+
+# 发布与审核按领域拆到 app/api/，入口文件只负责装配。
+# 放在 mount 之前注册，否则会被 StaticFiles 的 "/" 兜住。
+from .api import publish as publish_api  # noqa: E402
+from .api import review as review_api  # noqa: E402
+
+app.include_router(publish_api.router)
+app.include_router(review_api.router)
 
 
 class ScriptUpdate(BaseModel):
@@ -363,8 +388,28 @@ def start_render(task_id: str, background_tasks: BackgroundTasks):
                progress=1, error_message='', updated_at=? WHERE id=?""",
             (utc_now(), task_id),
         )
-    background_tasks.add_task(render_task, task_id)
+    background_tasks.add_task(render_and_enqueue, task_id)
     return {"message": "已提交视频工作台，正在排队处理", "task": serialize_task(get_task(task_id))}
+
+
+def render_and_enqueue(task_id: str) -> None:
+    """出片结束后自动进审核队列。
+
+    放在装配层而不是 workbench_client 里：出片适配器不该知道"审核"这件事，
+    而且审核台不可用时也绝不能影响出片本身。
+    """
+    render_task(task_id)
+    try:
+        row = get_task(task_id)
+        if row is None or not row["output_video_path"]:
+            return
+        from .review.service import run_precheck
+        from .review import store
+
+        store.create(task_id)
+        run_precheck(task_id)
+    except Exception as error:  # noqa: BLE001 - 审核台的问题不能反噬出片结果
+        logger.warning("出片成功但未能自动入审核队列（%s）：%s", task_id, error)
 
 
 @app.post("/api/tasks/{task_id}/status")
@@ -552,48 +597,7 @@ def sync_task_bitable(task_id: str):
     return {"result": sync_bitable_task(client, row), "task_no": row["task_no"]}
 
 
-# ---------- 发布到小红书 / 抖音 ----------
-# 延迟导入：发布层依赖 httpx 与 playright，没配环境时不应该拖慢启动。
-
-
-class PublishRequest(BaseModel):
-    platforms: list[str] | None = Field(default=None, description="留空则用设置里已启用的平台")
-    force: bool = Field(default=False, description="已发布过的任务是否强制重发")
-
-
-@app.get("/api/publish/status")
-def publish_platform_status():
-    from .publish import platform_status
-
-    return platform_status()
-
-
-@app.post("/api/tasks/{task_id}/publish")
-def publish_task_endpoint(task_id: str, payload: PublishRequest | None = None):
-    from .publish import publish_task as run_publish
-
-    row = get_task(task_id)
-    if row is None:
-        raise HTTPException(404, "任务不存在")
-    if not row["output_video_path"]:
-        raise HTTPException(400, "任务还没有成片，先出片再发布")
-    body = payload or PublishRequest()
-    return run_publish(row, platforms=body.platforms, force=body.force)
-
-
-@app.get("/api/publish/records")
-def publish_records(limit: int = Query(50, ge=1, le=200)):
-    from .publish import list_records
-
-    return {"items": list_records(limit)}
-
-
-@app.post("/api/publish/login-qrcode")
-def publish_login_qrcode(platform: str = Query("xiaohongshu")):
-    """取扫码登录二维码。小红书需要扫码；抖音用 CDP 附加，返回启动提示。"""
-    from .publish import publish_qrcode
-
-    return publish_qrcode(platform)
+# 发布与审核的路由在 app/api/ 下按领域拆分，这里只做装配，见文件末尾的 include_router。
 
 
 @app.get("/api/feishu/status")

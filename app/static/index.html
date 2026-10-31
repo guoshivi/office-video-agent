@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light">
-  <title>房源视频 Agent · 本地工作台</title>
+  <meta name="color-scheme" content="dark">
+  <title>房源视频工作台</title>
   <link rel="stylesheet" href="/styles.css">
   <script src="/app.js" defer></script>
 </head>
@@ -13,20 +13,24 @@
     <aside class="sidebar">
       <div class="brand">
         <div class="brand-mark"><span></span><span></span><span></span></div>
-        <div><strong>房源视频 Agent</strong><small>LOCAL STUDIO</small></div>
+        <div><strong>房源视频</strong><small>LOCAL STUDIO</small></div>
       </div>
+
       <nav class="nav" aria-label="主导航">
         <button class="nav-item active" data-view="dashboard"><span class="nav-icon">⌘</span>工作台</button>
+        <button class="nav-item" data-view="review"><span class="nav-icon">◉</span>审核台<span id="nav-review-count" class="nav-count">0</span></button>
         <button class="nav-item" data-view="properties"><span class="nav-icon">▦</span>房源库<span id="nav-property-count" class="nav-count">0</span></button>
         <button class="nav-item" data-view="tasks"><span class="nav-icon">▷</span>视频任务</button>
-        <button class="nav-item" data-view="settings"><span class="nav-icon">⚙</span>系统设置</button>
+        <button class="nav-item" data-view="publish"><span class="nav-icon">↗</span>发布</button>
+        <button class="nav-item" data-view="settings"><span class="nav-icon">⚙</span>设置</button>
       </nav>
+
       <div class="sidebar-foot">
         <div class="local-card">
           <span class="pulse"></span>
-          <div><strong>本地运行</strong><small>数据保存在这台电脑</small></div>
+          <div><strong>本地运行</strong><small>数据不出这台电脑</small></div>
         </div>
-        <p>WebUI 与飞书共用同一业务后端</p>
+        <p>WebUI 与飞书共用同一套业务后端</p>
       </div>
     </aside>
 
@@ -34,50 +38,115 @@
       <header class="topbar">
         <div><p id="page-eyebrow">OVERVIEW</p><h2 id="page-title">工作台</h2></div>
         <div class="top-actions">
+          <button class="button button-ghost" id="open-palette" title="搜索任务与房源">
+            <span>⌕</span> 搜索 <kbd>⌘K</kbd>
+          </button>
           <button class="button button-ghost" id="top-import">导入房源</button>
-          <button class="button button-primary" id="top-new-task"><span>＋</span> 新建视频任务</button>
+          <button class="button button-primary" id="top-new-task"><span>＋</span> 新建任务</button>
         </div>
       </header>
 
       <main>
+        <!-- ================================================= 工作台 -->
         <section class="view active" id="view-dashboard">
           <div class="hero">
             <div class="hero-copy">
               <p class="eyebrow light">OFFICE LISTING · VIDEO WORKFLOW</p>
-              <h1>从实拍素材，<br>到可发布的房源短片。</h1>
-              <p>统一管理房源、口播与视频任务。保留每一行原始数据，让每一步生成都清楚可追溯。</p>
-              <button class="button button-lime" id="hero-new-task">开始新任务 <span>↗</span></button>
+              <h1>拍完就发，<br>中间那段交给它。</h1>
+              <p>实拍视频进来，房源信息对上，口播和成片出去。每一步都留痕，每一条都能回看——因为房源数字错一个，就是一次带看纠纷。</p>
+              <button class="button button-primary" id="hero-new-task">开始新任务 <span>↗</span></button>
             </div>
+
             <div class="workflow-card">
-              <div class="workflow-head"><span>标准工作流</span><span class="tag dark">LOCAL FIRST</span></div>
+              <div class="workflow-head"><span>四步流水线</span><span class="tag dark">LOCAL FIRST</span></div>
               <ol>
-                <li><b>01</b><div><strong>导入房源</strong><small>Excel 原始字段与颜色标记留存</small></div></li>
-                <li><b>02</b><div><strong>绑定实拍视频</strong><small>人工确认房源，避免错配</small></div></li>
-                <li><b>03</b><div><strong>审核口播草稿</strong><small>内部备注与联系方式自动隔离</small></div></li>
-                <li><b>04</b><div><strong>交接视频引擎</strong><small>接入现有工作台完成配音与出片</small></div></li>
+                <li><b>01</b><div><strong>导入房源</strong><small>Excel 原始字段与颜色标记完整留存</small></div></li>
+                <li><b>02</b><div><strong>绑定实拍</strong><small>人工确认房源，避免拍错房</small></div></li>
+                <li><b>03</b><div><strong>预检 + 审核</strong><small>机器比对房源数字，人只裁异常</small></div></li>
+                <li><b>04</b><div><strong>出片发布</strong><small>配音烧字幕，通过后推到平台</small></div></li>
               </ol>
             </div>
           </div>
 
           <div class="stats-grid">
-            <article class="stat-card"><p>房源总数</p><strong id="stat-properties">—</strong><span>本地房源记录</span></article>
-            <article class="stat-card"><p>待确认</p><strong id="stat-review">—</strong><span>重复或缺失匹配字段</span></article>
-            <article class="stat-card"><p>视频任务</p><strong id="stat-tasks">—</strong><span>全部任务</span></article>
-            <article class="stat-card accent"><p>已完成</p><strong id="stat-completed">—</strong><span>人工确认完成</span></article>
+            <article class="stat-card"><p>房源总数</p><strong id="stat-properties" data-count="0">—</strong><span>本地房源记录</span></article>
+            <article class="stat-card"><p>待审核</p><strong id="stat-review" data-count="0">—</strong><span>出片后等待裁决</span></article>
+            <article class="stat-card"><p>视频任务</p><strong id="stat-tasks" data-count="0">—</strong><span>全部任务</span></article>
+            <article class="stat-card accent"><p>已完成</p><strong id="stat-completed" data-count="0">—</strong><span>成片已生成</span></article>
           </div>
 
-          <div class="section-heading"><div><p class="eyebrow">RECENT ACTIVITY</p><h3>最近视频任务</h3></div><button class="text-button" data-go="tasks">查看全部 →</button></div>
+          <div class="section-heading">
+            <div><p class="eyebrow">RECENT ACTIVITY</p><h3>最近视频任务</h3></div>
+            <button class="text-button" data-go="tasks">查看全部 →</button>
+          </div>
           <div class="panel"><div id="recent-tasks" class="task-list"></div></div>
         </section>
 
+        <!-- ================================================= 审核台 -->
+        <section class="view" id="view-review">
+          <div class="review-layout">
+            <div class="review-queue">
+              <div class="queue-head">
+                <div>待审队列 <span id="queue-head-count" class="counts"></span></div>
+                <select id="review-filter" title="筛选">
+                  <option value="pending">只看待审</option>
+                  <option value="approved">已通过</option>
+                  <option value="rejected">已驳回</option>
+                  <option value="published">已发布</option>
+                  <option value="">全部</option>
+                </select>
+              </div>
+              <div class="queue-list" id="queue-list"></div>
+            </div>
+
+            <div class="review-stage" id="review-stage">
+              <div class="stage-head">
+                <div>
+                  <h3 id="stage-title">选一条待审的片子</h3>
+                  <p class="mono" id="stage-sub" style="margin:3px 0 0">机器会先比对房源数字，你只需要看标红的</p>
+                </div>
+                <button class="button button-sm button-ghost" id="btn-rerun" title="重新跑一遍预检">重跑预检</button>
+              </div>
+
+              <div class="stage-body">
+                <div class="stage-player">
+                  <div class="player-frame" id="stage-player">
+                    <div class="placeholder">左侧选一条，成片会出现在这里</div>
+                  </div>
+                </div>
+                <div class="stage-side">
+                  <div class="verdict-banner" id="stage-verdict">
+                    <span class="dot"></span>
+                    <div><strong>等待选择</strong><small>预检结论会显示在这里</small></div>
+                  </div>
+                  <div class="check-list" id="stage-checks"></div>
+                  <div id="stage-script-wrap" class="hidden">
+                    <p class="eyebrow">口播文案</p>
+                    <textarea id="stage-script" rows="6"></textarea>
+                  </div>
+                </div>
+              </div>
+
+              <div class="stage-actions">
+                <input class="stage-note" id="stage-note" placeholder="审核备注（驳回必填）">
+                <span class="spacer"></span>
+                <button class="button button-sm" id="btn-skip">跳过</button>
+                <button class="button button-sm button-danger" id="btn-reject">驳回</button>
+                <button class="button button-sm button-lime" id="btn-approve">通过并发布</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================================================= 房源库 -->
         <section class="view" id="view-properties">
           <div class="section-heading">
-            <div><p class="eyebrow">LISTING DATABASE</p><h3>房源库</h3><p class="section-note">原始数据不被覆盖，标准化字段用于搜索与口播。</p></div>
+            <p class="section-note">原始数据不被覆盖，标准化字段只用于搜索与口播。</p>
             <button class="button button-primary" id="property-import">导入 Excel</button>
           </div>
           <div class="toolbar panel">
             <label class="search-box"><span>⌕</span><input id="property-search" placeholder="搜索区域、楼栋、房号或面积"></label>
-            <select id="search-mode"><option value="keyword">关键词搜索</option><option value="semantic">语义搜索</option></select>
+            <select id="search-mode"><option value="keyword">关键词</option><option value="semantic">语义搜索</option></select>
             <select id="property-status"><option value="">全部状态</option><option value="active">已匹配</option><option value="needs_review">待确认</option></select>
             <button class="button button-ghost" id="property-refresh">刷新</button>
           </div>
@@ -87,9 +156,10 @@
           </div>
         </section>
 
+        <!-- ================================================= 视频任务 -->
         <section class="view" id="view-tasks">
           <div class="section-heading">
-            <div><p class="eyebrow">VIDEO PIPELINE</p><h3>视频任务</h3><p class="section-note">当前阶段生成口播与工作台任务包，不会显示虚假的渲染进度。</p></div>
+            <p class="section-note">出片进度取自工作台真实回执，不显示虚假进度。</p>
             <button class="button button-primary" id="task-new">新建视频任务</button>
           </div>
           <div class="panel table-panel">
@@ -98,11 +168,31 @@
           </div>
         </section>
 
+        <!-- ================================================= 发布 -->
+        <section class="view" id="view-publish">
+          <div class="section-heading">
+            <p class="section-note">小红书走本地 MCP 服务；抖音用 CDP 附加到你正在用的 Chrome，借真实登录态减少风控。</p>
+            <button class="button button-ghost" id="publish-refresh">刷新状态</button>
+          </div>
+          <div class="publish-grid" id="publish-grid"></div>
+
+          <div class="section-heading"><div><p class="eyebrow">HISTORY</p><h3>发布记录</h3></div></div>
+          <div class="panel table-panel">
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>时间</th><th>平台</th><th>标题</th><th>状态</th><th>结果</th></tr></thead>
+                <tbody id="publish-rows"></tbody>
+              </table>
+            </div>
+            <div class="table-footer" id="publish-total">还没有发布记录</div>
+          </div>
+        </section>
+
+        <!-- ================================================= 设置 -->
         <section class="view" id="view-settings">
-          <div class="section-heading"><div><p class="eyebrow">LOCAL CONFIGURATION</p><h3>系统设置</h3><p class="section-note">配置仅保存在本机，密钥后续通过 .env 单独管理。</p></div></div>
           <div class="settings-grid">
             <form class="panel settings-form" id="settings-form">
-              <div class="panel-title"><div><h4>生成默认值</h4><p>新建任务时可以再次调整。</p></div></div>
+              <div class="panel-title"><div><h4>生成与发布默认值</h4><p>新建任务时可以再次调整。</p></div></div>
               <label>公开咨询引导<input name="public_contact" maxlength="300" placeholder="例如：欢迎私信咨询房源详情"></label>
               <div class="form-row">
                 <label>默认时长（秒）<input name="default_duration" type="number" min="10" max="180"></label>
@@ -111,15 +201,23 @@
               <label>默认声音<select name="default_voice"><option value="female_warm">温暖女声</option><option value="male_professional">专业男声</option></select></label>
               <label>视频工作台 API 地址<input name="workbench_url" placeholder="http://192.168.x.x:8765"></label>
               <label>工作台输出目录<input name="workbench_output_root" placeholder="data/workbench_outputs"></label>
-              <label>工作台授权素材根目录<input name="workbench_material_root" placeholder="留空则自动探测，例如 D://素材//一条根素材"><small>工作台只接受授权 NAS 根目录内的素材与输出，留空时自动读取工作台的 /api/roots。</small></label>
+              <label>工作台授权素材根目录<input name="workbench_material_root" placeholder="留空则自动探测"><small>工作台只接受授权 NAS 根目录内的素材与输出，留空时自动读取 /api/roots。</small></label>
+              <div class="form-row">
+                <label>每日发布上限<input name="publish_daily_limit" type="number" min="1" max="20"></label>
+                <label>最小间隔（分钟）<input name="publish_min_interval_minutes" type="number" min="0" max="1440"></label>
+              </div>
+              <label>小红书 MCP 地址<input name="publish_xhs_mcp_url" placeholder="http://127.0.0.1:18060/mcp"></label>
+              <label>抖音 CDP 地址<input name="publish_douyin_cdp_url" placeholder="http://127.0.0.1:9222"></label>
               <button class="button button-primary" type="submit">保存设置</button>
             </form>
+
             <div class="settings-side">
               <article class="panel integration-card"><div class="integration-icon">FF</div><div><h4>视频处理引擎</h4><p id="ffmpeg-status">检测中</p></div><span class="status-pill neutral" id="ffmpeg-pill">检测中</span></article>
               <article class="panel integration-card"><div class="integration-icon">V</div><div><h4>本地向量模型</h4><p id="semantic-status">正在读取索引状态</p><button class="text-button semantic-button" id="semantic-reindex" type="button">建立 / 更新索引</button></div><span class="status-pill neutral" id="semantic-pill">检测中</span></article>
               <article class="panel integration-card"><div class="integration-icon">W</div><div><h4>现有视频工作台</h4><p id="workbench-status">正在检查 API 配置</p></div><span class="status-pill neutral" id="workbench-pill">检测中</span></article>
               <article class="panel integration-card"><div class="integration-icon">飞</div><div><h4>飞书 Agent</h4><p id="feishu-status">正在检查长连接</p><button class="text-button semantic-button" id="feishu-restart" type="button">重连长连接</button></div><span class="status-pill neutral" id="feishu-pill">检测中</span></article>
-              <article class="panel data-card"><p class="eyebrow">PORTABLE DATA</p><h4>可迁移的本地数据</h4><p>数据库、上传视频和导出任务包统一放在 data 目录。GitHub 只保存代码，真实房源与视频不会被提交。</p><code id="data-directory">读取中…</code></article>
+              <article class="panel integration-card"><div class="integration-icon">审</div><div><h4>审核镜像到多维表格</h4><p id="bitable-status">正在检查表格配置</p><button class="text-button semantic-button" id="bitable-push" type="button">推送当前队列</button></div><span class="status-pill neutral" id="bitable-pill">检测中</span></article>
+              <article class="panel data-card"><p class="eyebrow">PORTABLE DATA</p><h4>可迁移的本地数据</h4><p>数据库、上传视频和成片统一放在 data 目录。GitHub 只保存代码，真实房源与视频不会被提交。</p><code id="data-directory">读取中…</code></article>
             </div>
           </div>
         </section>
@@ -127,12 +225,31 @@
     </div>
   </div>
 
+  <!-- ================================================= 命令面板 -->
+  <div class="palette" id="palette">
+    <div class="palette-box">
+      <div class="palette-input">
+        <span>⌕</span>
+        <input id="palette-input" placeholder="搜索任务编号、房源、或输入操作…" autocomplete="off">
+      </div>
+      <div class="palette-results" id="palette-results"></div>
+      <div class="palette-foot">
+        <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
+        <span><kbd>↵</kbd> 打开</span>
+        <span><kbd>esc</kbd> 关闭</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="drop-veil" id="drop-veil">松手即可导入房源 Excel</div>
+
+  <!-- ================================================= 对话框 -->
   <dialog id="import-dialog">
     <form id="import-form" class="dialog-card">
       <div class="dialog-head"><div><p class="eyebrow">EXCEL IMPORT</p><h3>导入房源数据库</h3></div><button type="button" class="icon-button" data-close="import-dialog">×</button></div>
-      <p class="dialog-description">支持当前“标题 + 第 2 行表头”的 .xlsx 格式。原文件不会被修改，重复房源不会被自动覆盖。</p>
+      <p class="dialog-description">支持「标题 + 第 2 行表头」的 .xlsx 格式。原文件不会被修改，重复房源不会被自动覆盖。</p>
       <label class="drop-zone" id="excel-drop"><input type="file" name="file" accept=".xlsx,.xlsm" required><span class="drop-icon">⇧</span><strong>选择房源 Excel 文件</strong><small>最大 20 MB · 保留字段、颜色和来源行号</small><span id="excel-file-name"></span></label>
-      <div class="notice">黄色“新增”和红色“特别标注”会一并导入；门禁、佣金和联系方式只作为受限原始字段保存。</div>
+      <div class="notice">黄色「新增」和红色「特别标注」会一并导入；门禁、佣金和联系方式只作为受限原始字段保存，不会进入对外文案。</div>
       <div id="import-result" class="import-result hidden"></div>
       <div class="dialog-actions"><button type="button" class="button button-ghost" data-close="import-dialog">取消</button><button class="button button-primary" type="submit">开始导入</button></div>
     </form>
@@ -149,7 +266,7 @@
         <label>声音<select name="voice"><option value="female_warm">温暖女声</option><option value="male_professional">专业男声</option></select></label>
         <label>风格<select name="style"><option value="professional">专业简洁</option><option value="warm">自然亲和</option></select></label>
       </div>
-      <div class="notice">提交后会生成可编辑的口播草稿。真实配音与成片需接入现有视频工作台。</div>
+      <div class="notice">提交后会生成可编辑的口播草稿。真实配音与成片由视频工作台完成。</div>
       <div class="dialog-actions"><button type="button" class="button button-ghost" data-close="task-dialog">取消</button><button class="button button-primary" type="submit">上传并创建草稿</button></div>
     </form>
   </dialog>
