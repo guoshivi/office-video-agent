@@ -4,7 +4,7 @@ import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -101,6 +101,22 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="房源视频工作台", version=__version__, lifespan=lifespan)
+
+
+# 本地工具，静态资源永远用最新的那份。
+# 不加这个头时浏览器会启发式缓存（按 Last-Modified 猜一个有效期），
+# 改了 CSS 刷新还是旧样子——排查时很容易误判成"没改对"。
+@app.middleware("http")
+async def no_stale_statics(request: Request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if not path.startswith("/api/") and (
+        path == "/" or path.endswith((".html", ".css", ".js", ".svg"))
+    ):
+        response.headers["Cache-Control"] = "no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+    return response
+
 
 # 发布与审核按领域拆到 app/api/，入口文件只负责装配。
 # 放在 mount 之前注册，否则会被 StaticFiles 的 "/" 兜住。
