@@ -1258,7 +1258,16 @@ dialog[open] { animation: dialogIn 0.32s var(--ease-out); }
   gap: 14px;
 }
 .dialog-card.wide { width: min(94vw, 860px); }
-.detail-card { width: min(94vw, 1000px); }
+#detail-dialog { max-width: min(94vw, 1000px); }
+
+.detail-card {
+  width: min(94vw, 1000px);
+  /* 高度交给窗口，不交给视频。竖版 9:16 按 100% 宽渲染会到 800px 以上，
+     把弹窗顶出视口、还多出一条滚动条。 */
+  height: min(88vh, 780px);
+  display: flex;
+  flex-direction: column;
+}
 
 .dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .dialog-head h3 { margin: 0; font-size: 17px; font-weight: 600; }
@@ -1301,9 +1310,64 @@ dialog[open] { animation: dialogIn 0.32s var(--ease-out); }
   line-height: 1.65;
 }
 
-.detail-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; }
-.detail-layout video { width: 100%; border-radius: 12px; background: #000; }
-.detail-layout label { display: grid; gap: 6px; font-size: 12.5px; color: var(--text-2); }
+.detail-layout {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.95fr);
+  gap: 18px;
+}
+.detail-side {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+/* 视频帧吃掉这一栏剩下的高度；竖版/横版都用 contain 缩进框里，
+   永远不改变弹窗尺寸，也永远不裁掉画面。 */
+.detail-stage {
+  flex: 1;
+  min-height: 150px;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #000;
+}
+/* 绝对定位而不是 height:100%。grid 里 item 的百分比高度解析不出来，
+   会退回按原始宽高比算，竖版视频照样撑到 800 多 px。 */
+.detail-stage video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+  border-radius: 0;
+}
+
+.detail-script-field {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.detail-script-field textarea {
+  flex: 1;
+  min-height: 140px;
+  resize: none;
+}
+
+.detail-side .warning-list,
+.detail-side .import-result { flex: 0 0 auto; }
+/* 警告多的时候在框里滚，别把左边视频挤成一条缝 */
+.detail-side .warning-list { max-height: 118px; overflow-y: auto; padding-right: 4px; }
+.detail-side .render-state,
+.detail-side .detail-actions { flex: 0 0 auto; }
 .detail-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
 
 .render-state {
@@ -1568,6 +1632,10 @@ kbd {
   .main-shell { overflow: visible; }
   main { padding: 18px 16px 50px; overflow: visible; }
   .hero, .settings-grid, .detail-layout, .review-layout { grid-template-columns: 1fr; }
+  /* 窄屏两栏叠成一栏，固定高度会把内容挤扁，改回按内容走、整窗滚动 */
+  .detail-card { height: auto; max-height: 88vh; }
+  .detail-layout { overflow-y: auto; }
+  .detail-stage { min-height: 220px; }
   .review-layout { height: auto; }
   .queue-list { max-height: 320px; }
   .form-grid { grid-template-columns: 1fr; }
