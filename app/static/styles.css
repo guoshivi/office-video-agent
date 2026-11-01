@@ -1282,6 +1282,36 @@ dialog[open] { animation: dialogIn 0.32s var(--ease-out); }
 .form-grid label.full { grid-column: 1 / -1; }
 .form-grid label small { font-size: 11px; color: var(--text-3); }
 
+/* 「跟原片」那一格：label 换成 div 才能塞按钮（button 在 label 里
+   会被 label 的点击转发吞掉） */
+.form-grid .form-field { display: grid; gap: 6px; font-size: 12.5px; color: var(--text-2); }
+.duration-row { display: flex; gap: 8px; align-items: stretch; }
+.duration-row input { flex: 1 1 auto; min-width: 0; }
+.duration-use-source {
+  flex: 0 0 auto;
+  padding: 0 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.16s, color 0.16s, background 0.16s;
+}
+.duration-use-source:hover:not(:disabled) {
+  border-color: rgba(255, 176, 32, 0.4);
+  color: var(--amber);
+  background: rgba(255, 176, 32, 0.07);
+}
+.duration-use-source:disabled { opacity: 0.42; cursor: not-allowed; }
+.duration-use-source.on {
+  border-color: rgba(255, 176, 32, 0.5);
+  background: rgba(255, 176, 32, 0.12);
+  color: var(--amber);
+}
+
 .drop-zone {
   display: grid;
   place-items: center;

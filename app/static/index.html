@@ -273,7 +273,7 @@
       <div class="form-grid">
         <label class="full">关联房源<select name="property_id" id="task-property" required><option value="">请先导入房源</option></select><small>通过房源绑定避免画面识别错误；待确认房源会先显示警示。</small></label>
         <label class="full">实拍视频<input type="file" name="video" id="video-input" accept="video/mp4,video/quicktime,video/x-m4v,video/x-msvideo,video/x-matroska" required><small id="video-file-name">MP4、MOV、M4V、AVI、MKV，单个不超过 2 GB</small></label>
-        <label>目标时长（秒）<input name="target_duration" type="number" min="10" max="180" value="45"></label>
+        <div class="form-field">目标时长（秒）<span class="duration-row"><input name="target_duration" id="target-duration" type="number" min="10" max="180" value="45"><button type="button" class="duration-use-source" id="use-source-duration" disabled title="先选视频，再点这里按原片长度出片">跟原片</button></span></div>
         <label>视频比例<select name="aspect_ratio"><option>9:16</option><option>16:9</option></select></label>
         <label>声音<select name="voice"><option value="female_warm">温暖女声</option><option value="male_professional">专业男声</option></select></label>
         <label>风格<select name="style"><option value="professional">专业简洁</option><option value="warm">自然亲和</option></select></label>
