@@ -49,6 +49,17 @@
       <main>
         <!-- ================================================= 工作台 -->
         <section class="view active" id="view-dashboard">
+          <!-- 开工体检：不懂电脑的人第一眼要知道"现在能不能干活、缺什么、点哪里修" -->
+          <div class="ready-bar is-loading" id="ready-bar">
+            <span class="ready-dot" aria-hidden="true"></span>
+            <div class="ready-copy">
+              <strong id="ready-headline">正在检查能不能开工…</strong>
+              <small id="ready-detail">查一下出片引擎和两个发布平台</small>
+            </div>
+            <div class="ready-chips" id="ready-chips"></div>
+            <button class="ready-refresh" id="ready-refresh" type="button" title="重新检查">重新检查</button>
+          </div>
+
           <div class="hero">
             <div class="hero-copy">
               <p class="eyebrow light">OFFICE LISTING · VIDEO WORKFLOW</p>
@@ -105,7 +116,7 @@
                   <h3 id="stage-title">选一条待审的片子</h3>
                   <p class="mono" id="stage-sub" style="margin:3px 0 0">机器会先比对房源数字，你只需要看标红的</p>
                 </div>
-                <button class="button button-sm button-ghost" id="btn-rerun" title="重新跑一遍预检">重跑预检</button>
+                <button class="button button-sm button-ghost" id="btn-rerun" title="重新检查一遍这条片子">重新检查</button>
               </div>
 
               <div class="stage-body">
@@ -117,7 +128,7 @@
                 <div class="stage-side">
                   <div class="verdict-banner" id="stage-verdict">
                     <span class="dot"></span>
-                    <div><strong>等待选择</strong><small>预检结论会显示在这里</small></div>
+                    <div><strong>等待选择</strong><small>检查结论会显示在这里</small></div>
                   </div>
                   <div class="check-list" id="stage-checks"></div>
                   <div id="stage-script-wrap" class="hidden">
@@ -268,6 +279,49 @@
       </div>
       <div class="notice">提交后会生成可编辑的口播草稿。真实配音与成片由视频工作台完成。</div>
       <div class="dialog-actions"><button type="button" class="button button-ghost" data-close="task-dialog">取消</button><button class="button button-primary" type="submit">上传并创建草稿</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="quick-dialog">
+    <form class="dialog-card wide quick-card" id="quick-form">
+      <div class="dialog-head"><div><p class="eyebrow">QUICK START</p><h3>拖一段视频进来</h3></div><button type="button" class="icon-button" data-close="quick-dialog">×</button></div>
+      <p class="dialog-description">三步：放视频、打一个房号、开始出片。其余的都按默认值走。</p>
+
+      <ol class="quick-steps">
+        <li class="quick-step" id="quick-step-video">
+          <span class="quick-index">1</span>
+          <div class="quick-body">
+            <label class="drop-zone quick-drop" id="quick-drop">
+              <input type="file" id="quick-video" accept="video/mp4,video/quicktime,video/x-m4v,video/x-msvideo,video/x-matroska">
+              <span class="drop-icon">⇧</span>
+              <strong>把实拍视频拖到这里</strong>
+              <small>或者点一下选文件 · MP4 / MOV / M4V / AVI / MKV · 不超过 2 GB</small>
+              <span id="quick-file-name"></span>
+            </label>
+            <div class="quick-progress hidden" id="quick-progress"><span id="quick-progress-bar"></span></div>
+          </div>
+        </li>
+
+        <li class="quick-step" id="quick-step-property">
+          <span class="quick-index">2</span>
+          <div class="quick-body">
+            <label>这段视频是哪套房？<input id="quick-query" placeholder="例如：F区 F14 202-2" autocomplete="off"><small>打区 + 楼栋 + 房号，打错一个字也能匹配到候选。</small></label>
+            <div class="quick-matches" id="quick-matches"></div>
+          </div>
+        </li>
+
+        <li class="quick-step" id="quick-step-go">
+          <span class="quick-index">3</span>
+          <div class="quick-body"><p class="quick-summary" id="quick-summary">选好视频、确认房源，就可以开始。</p></div>
+        </li>
+      </ol>
+
+      <div class="dialog-actions">
+        <button type="button" class="text-button" id="quick-advanced">改用详细表单</button>
+        <span class="dialog-spacer"></span>
+        <button type="button" class="button button-ghost" data-close="quick-dialog">取消</button>
+        <button class="button button-primary" type="submit" id="quick-submit" disabled>开始出片</button>
+      </div>
     </form>
   </dialog>
 

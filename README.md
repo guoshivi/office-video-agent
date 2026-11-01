@@ -9,6 +9,22 @@
 - **飞书 / WorkBuddy**：在外面发视频、回房号、收成片
 - **命令行**：`ova.bat status`，排查问题或写脚本
 
+## 给不懂电脑的人：双击就行
+
+整套东西里对使用者有意义的只有**三句话**：
+
+1. **双击 `start.bat`**，浏览器会自己打开。
+2. 首页顶上有一条**能不能开工**的状态条：绿色就是能干活，红/黄会写清缺什么，点一下就能修
+   （启动发布服务、打开登录窗口、去填地址，都是点一下的事）。
+3. 出片只要三步：**把视频拖进去 → 打一个房号（如 `F区 F14 202-2`）→ 点「开始出片」**。
+
+背后其实是三个进程（网页 8770、小红书服务 18060、发布用浏览器 9222）和一堆术语
+（MCP / CDP / 预检 / blocking）。这些全部收在程序内部：
+`start.bat` 负责起网页，`app/ready.py` 负责把另外两个按需拉起来，
+并且把状态翻成"能开工 / 还差一件事"这种话。
+
+一页纸说明：[docs/quickstart.md](docs/quickstart.md)。
+
 ## 它到底做了什么
 
 ```
@@ -183,7 +199,8 @@ app/
   hygiene.py         措辞卫生：内部提醒句的词表与摘句（出片前 + 审核时共用）
   semantic.py        向量 + 规则混合检索
   workbench_client.py 视频工作台适配（建项目/索引/出片/回传）
-  api/               路由按领域拆开：publish / review
+  ready.py           开工体检：三项人话结论 + 一键启动发布服务
+  api/               路由按领域拆开：ready / publish / review
   review/            审核台：precheck（纯函数）/ store（只存取）/ service（编排）/ bitable_bridge
   publish/           发布到小红书（MCP）/ 抖音（CDP）：policy / mcp_client / xhs / douyin
   feishu/            独立机器人（方案 B）：client / intents / handlers / bitable / bot
@@ -197,6 +214,7 @@ tools/
   ui_shot.py         给各个页面截图，改完前端用它对一眼
 data/                数据库、上传视频、成片、导出包（不进 Git）
 docs/feishu-setup.md 飞书两种接法的完整步骤
+docs/quickstart.md   给不懂电脑的人看的一页纸：双击、看灯、三步出片
 docs/review.md       审核台：预检规则、状态机、多维表格桥接
 docs/publish.md      发布链路、平台差异、已验证项与踩过的坑
 docs/runbook.md      运维手册：启动、日常流程、故障排查、模块边界

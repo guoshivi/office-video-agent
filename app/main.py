@@ -1,5 +1,6 @@
 import logging
 import shutil
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -72,6 +73,19 @@ async def lifespan(_: FastAPI):
     except Exception:
         logger.exception("多维表格审核轮询启动失败")
 
+    # 已启用的发布服务在后台线程里拉起，别让"等浏览器启动"拖慢首页
+    def _autostart_services() -> None:
+        try:
+            from . import ready
+
+            started = ready.autostart()
+            if started:
+                logger.info("自动启动发布服务：%s", started)
+        except Exception:
+            logger.exception("自动启动发布服务失败")
+
+    threading.Thread(target=_autostart_services, name="autostart", daemon=True).start()
+
     yield
 
     try:
@@ -91,9 +105,11 @@ app = FastAPI(title="房源视频工作台", version=__version__, lifespan=lifes
 # 发布与审核按领域拆到 app/api/，入口文件只负责装配。
 # 放在 mount 之前注册，否则会被 StaticFiles 的 "/" 兜住。
 from .api import publish as publish_api  # noqa: E402
+from .api import ready as ready_api  # noqa: E402
 from .api import review as review_api  # noqa: E402
 
 app.include_router(publish_api.router)
+app.include_router(ready_api.router)
 app.include_router(review_api.router)
 
 

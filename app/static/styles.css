@@ -471,6 +471,99 @@ main {
   border: 1px solid rgba(255, 255, 255, 0.09);
 }
 
+/* ============================================================ 开工体检 */
+/* 一条横条回答"现在能不能干活"。状态用颜色区分，别让人读句子才明白：
+   绿=全好，琥珀=能出片但发布没配好，红=连出片都不行。 */
+
+.ready-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 13px 16px;
+  margin-bottom: 22px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  transition: border-color 0.3s var(--ease), background 0.3s var(--ease);
+}
+.ready-bar[data-state="ok"] { border-color: rgba(52, 209, 163, 0.28); background: rgba(52, 209, 163, 0.05); }
+.ready-bar[data-state="gap"] { border-color: rgba(255, 176, 32, 0.28); background: rgba(255, 176, 32, 0.05); }
+.ready-bar[data-state="down"] { border-color: rgba(255, 95, 109, 0.32); background: rgba(255, 95, 109, 0.06); }
+
+.ready-dot {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-3);
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.04);
+}
+.ready-bar[data-state="ok"] .ready-dot { background: var(--jade); box-shadow: 0 0 0 4px var(--jade-soft); }
+.ready-bar[data-state="gap"] .ready-dot { background: var(--amber); box-shadow: 0 0 0 4px var(--amber-soft); }
+.ready-bar[data-state="down"] .ready-dot { background: var(--rose); box-shadow: 0 0 0 4px var(--rose-soft); }
+.ready-bar.is-loading .ready-dot { animation: ready-pulse 1.4s ease-in-out infinite; }
+@keyframes ready-pulse { 50% { opacity: 0.35; } }
+
+.ready-copy { flex: 1 1 auto; min-width: 0; }
+.ready-copy strong { display: block; font-size: 13.5px; font-weight: 600; letter-spacing: -0.01em; }
+.ready-copy small {
+  display: block;
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ready-chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 0 0 auto; }
+.ready-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: default;
+  transition: border-color 0.2s var(--ease), color 0.2s var(--ease), background 0.2s var(--ease);
+}
+.ready-chip span { font-size: 10.5px; color: var(--text-3); }
+.ready-chip.ok { border-color: rgba(52, 209, 163, 0.22); color: #b7e8d7; }
+.ready-chip.ok span { color: var(--jade); }
+.ready-chip.todo { border-color: rgba(255, 95, 109, 0.28); color: #ffc2c7; }
+.ready-chip.todo span { color: var(--rose); }
+.ready-chip.off span { color: var(--text-3); }
+/* 能点的才有 hover：不能点的做成"只读标签"，避免让人反复去点它 */
+.ready-chip.can-fix { cursor: pointer; }
+.ready-chip.can-fix:hover { background: var(--surface-2); border-color: var(--line-strong); color: var(--text); }
+.ready-chip.can-fix:hover span { color: var(--amber); }
+.ready-chip:disabled { cursor: default; opacity: 0.75; }
+
+.ready-refresh {
+  flex: 0 0 auto;
+  padding: 5px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text-3);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: color 0.2s var(--ease), border-color 0.2s var(--ease);
+}
+.ready-refresh:hover:not(:disabled) { color: var(--text); border-color: var(--line-strong); }
+.ready-refresh:disabled { cursor: default; opacity: 0.6; }
+
+@media (max-width: 900px) {
+  .ready-bar { flex-wrap: wrap; }
+  .ready-copy { flex-basis: 100%; }
+  .ready-copy small { white-space: normal; }
+}
+
 /* ============================================================ 首页 hero */
 
 .hero {
@@ -958,6 +1051,16 @@ textarea { resize: vertical; line-height: 1.7; width: 100%; }
 }
 .check-item.blocking .tag-lv { color: var(--rose); }
 .check-item.warn .tag-lv { color: var(--amber); }
+/* "怎么办"这一行比"哪里不对"更重要：前者告诉人接下来动哪里 */
+.check-item .fix {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+.check-item.blocking .fix { color: rgba(255, 179, 184, 0.72); }
+.check-item.warn .fix { color: rgba(255, 215, 154, 0.7); }
 
 .stage-actions {
   display: flex;
@@ -1235,6 +1338,77 @@ dialog[open] { animation: dialogIn 0.32s var(--ease-out); }
   line-height: 1.7;
 }
 .hidden { display: none !important; }
+
+/* ============================================================ 快速出片 */
+/* 给不懂电脑的人用：只有一个视频框、一个输入框、一个按钮。
+   原来那个要选房源下拉、填时长比例声音的表单退到「改用详细表单」后面。 */
+
+.quick-card { max-width: 720px; }
+.quick-steps { list-style: none; margin: 0 0 4px; padding: 0; display: grid; gap: 15px; }
+.quick-step { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 12px; align-items: start; }
+.quick-index {
+  width: 22px;
+  height: 22px;
+  margin-top: 3px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--text-3);
+}
+.quick-step.done .quick-index {
+  background: var(--jade-soft);
+  border-color: rgba(52, 209, 163, 0.3);
+  color: var(--jade);
+}
+.quick-body { min-width: 0; }
+.quick-body label { display: grid; gap: 6px; font-size: 12.5px; color: var(--text-2); }
+.quick-body label small { font-size: 11px; color: var(--text-3); }
+.quick-drop { padding: 22px 16px; }
+
+.quick-progress {
+  height: 4px;
+  margin-top: 9px;
+  border-radius: 99px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.quick-progress span {
+  display: block;
+  width: 0%;
+  height: 100%;
+  background: linear-gradient(90deg, var(--amber), var(--amber-2));
+  transition: width 0.18s linear;
+}
+
+.quick-matches { display: grid; gap: 6px; margin-top: 10px; }
+.quick-match {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.16s, background 0.16s, color 0.16s;
+}
+.quick-match:hover { border-color: var(--line-strong); background: var(--surface-2); color: var(--text); }
+.quick-match.chosen { border-color: rgba(52, 209, 163, 0.42); background: var(--jade-soft); color: #cdf3e7; }
+.quick-match small { margin-left: auto; flex: 0 0 auto; font-size: 11px; color: var(--text-3); }
+.quick-match.chosen small { color: var(--jade); }
+.quick-empty { padding: 9px 12px; font-size: 11.5px; color: var(--text-3); }
+.quick-summary { margin: 0; font-size: 12.5px; line-height: 1.65; color: var(--text-2); }
+.quick-summary strong { color: var(--text); }
+.dialog-spacer { flex: 1; }
 
 /* ============================================================ 命令面板 */
 
