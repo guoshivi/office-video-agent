@@ -69,8 +69,8 @@ body {
   overflow: hidden;
 }
 
-/* 背景：跟随鼠标的两团光晕 + 顶部网格。刻意压得很淡，
-   存在感太强会跟视频抢注意力。 */
+/* 背景：两团固定的光晕 + 顶部网格。刻意压得很淡，
+   存在感太强会跟视频抢注意力。（早期版本会跟随鼠标，太晃眼，去掉） */
 body::before {
   content: "";
   position: fixed;
@@ -78,10 +78,9 @@ body::before {
   z-index: 0;
   pointer-events: none;
   background:
-    radial-gradient(620px 460px at var(--mx, 22%) var(--my, 8%), rgba(255, 176, 32, 0.1), transparent 62%),
+    radial-gradient(620px 460px at 22% 8%, rgba(255, 176, 32, 0.1), transparent 62%),
     radial-gradient(900px 620px at 88% 92%, rgba(52, 209, 163, 0.075), transparent 62%);
   filter: blur(18px);
-  transition: background 0.45s var(--ease);
 }
 
 body::after {
