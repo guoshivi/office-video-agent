@@ -330,8 +330,16 @@
     <div class="dialog-card detail-card">
       <div class="dialog-head"><div><p class="eyebrow" id="detail-number">TASK</p><h3 id="detail-title">任务详情</h3></div><button type="button" class="icon-button" data-close="detail-dialog">×</button></div>
       <div class="detail-layout">
-        <div><video id="detail-video" controls playsinline></video><div id="detail-warnings" class="warning-list"></div><div id="export-result" class="import-result hidden"></div></div>
-        <div><label>口播草稿<textarea id="detail-script" rows="12"></textarea></label><div class="render-state" id="render-status">尚未提交真实出片</div><div class="detail-actions"><button class="button button-ghost" id="save-script">保存草稿</button><button class="button button-ghost" id="export-task">导出任务包</button><button class="button button-primary" id="render-task">提交真实出片</button><a class="button button-lime hidden" id="detail-output" href="#" download>下载成片</a></div></div>
+        <div class="detail-side">
+          <div class="detail-stage"><video id="detail-video" controls playsinline></video></div>
+          <div id="detail-warnings" class="warning-list"></div>
+          <div id="export-result" class="import-result hidden"></div>
+        </div>
+        <div class="detail-side">
+          <label class="detail-script-field"><span>口播草稿</span><textarea id="detail-script" rows="12"></textarea></label>
+          <div class="render-state" id="render-status">尚未提交真实出片</div>
+          <div class="detail-actions"><button class="button button-ghost" id="save-script">保存草稿</button><button class="button button-ghost" id="export-task">导出任务包</button><button class="button button-primary" id="render-task">提交真实出片</button><a class="button button-lime hidden" id="detail-output" href="#" download>下载成片</a></div>
+        </div>
       </div>
     </div>
   </dialog>
