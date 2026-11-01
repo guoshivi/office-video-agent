@@ -56,9 +56,14 @@ class XhsPublisher:
     def _client(self) -> McpHttpClient:
         return McpHttpClient(self.mcp_url, self.token, timeout=600.0)
 
-    def status(self) -> dict:
+    def status(self, timeout: float = 8.0) -> dict:
+        """探活 + 登录态。
+
+        超时给 8 秒而不是发布用的 600 秒：这个函数会被首页体检调用，
+        服务真的卡住时，宁可显示"连不上"也不要把首屏转成白屏。
+        """
         try:
-            with self._client() as client:
+            with McpHttpClient(self.mcp_url, self.token, timeout=timeout) as client:
                 result = client.call_tool("check_login_status")
         except McpError as error:
             return {"reachable": False, "logged_in": False, "message": str(error)}

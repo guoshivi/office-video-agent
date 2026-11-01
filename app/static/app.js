@@ -47,6 +47,24 @@ const VIEW_META = {
 };
 
 const LEVEL_LABEL = { blocking: "必须处理", warn: "建议看看", ok: "正常", unknown: "待检" };
+const LEVEL_TAG = { blocking: "必须改", warn: "看一眼", ok: "OK", unknown: "待检" };
+
+// 机器能说清"哪里不对"，但说不出"你该动哪里"。
+// 这张表补的是后半句——对不懂这套系统的人来说，后者才是他真正需要的。
+const CHECK_FIX = {
+  script: "口播是空的，先写文案再出片",
+  video: "还没有成片，先点「提交真实出片」",
+  media: "读不出画面参数，人工打开看一眼能不能正常播放",
+  audio: "成片没有声音，配音没进去，重新出片",
+  aspect: "横版视频发到竖版平台会被压扁，重出竖版",
+  duration: "太短观众看不清，太长完播率会掉，15–60 秒最稳",
+  area: "把口播里的面积改成房源库那个数，再重新出片",
+  rent: "租金和房源库对不上，确认哪个是对的再改文案",
+  identity: "文案里出现了别的楼栋，八成是视频套错了房源",
+  compliance: "去掉微信、手机号、「加我」这类说法，会被限流",
+  hygiene: "口播里念出了内部提醒语，删掉那一句再重新出片",
+  duplicate: "这套房源最近发过，确认是不是要重发",
+};
 
 // 任务来源在数据库里是英文标识，界面上不该原样吐给使用者看
 const SOURCE_LABEL = { desktop: "本机上传", webui: "网页", feishu: "飞书", im: "消息", cli: "命令行" };
@@ -150,9 +168,98 @@ function showView(name) {
   if (name === "settings") loadSettings();
 }
 
+/* ------------------------------------------------------------------ 开工体检 */
+
+// 按钮上的字不用后端那句长描述，太长会撑破卡片；
+// action 到短动词的映射就放在前端，人话归人话。
+const READY_SHORT = {
+  start_xiaohongshu: "点我启动",
+  start_douyin: "点我打开",
+  login_xiaohongshu: "点我扫码",
+  enable_xiaohongshu: "点我打开",
+  enable_douyin: "点我打开",
+  open_settings: "去填地址",
+};
+
+function readyChip(item) {
+  const state = item.ok ? "ok" : item.optional ? "off" : "todo";
+  const tail = item.ok ? "在线" : (READY_SHORT[item.action] || "未就绪");
+  const clickable = Boolean(item.action);
+  return `<button type="button" class="ready-chip ${state}${clickable ? " can-fix" : ""}"
+    data-action="${escapeHtml(item.action)}" title="${escapeHtml(item.detail)}"
+    ${clickable ? "" : "disabled"}>
+    ${escapeHtml(item.label)}<span>${escapeHtml(tail)}</span></button>`;
+}
+
+function renderReady(report) {
+  const bar = $("#ready-bar");
+  if (!bar) return;
+  bar.classList.remove("is-loading");
+  bar.dataset.state = !report.can_render ? "down" : report.blocking ? "gap" : "ok";
+  $("#ready-headline").textContent = report.headline;
+  const problems = report.items.filter((item) => !item.ok && !item.optional);
+  $("#ready-detail").textContent = problems.length
+    ? problems.map((item) => item.detail).join("；")
+    : `上次检查 ${report.checked_at || "刚刚"}`;
+  $("#ready-chips").innerHTML = report.items.map(readyChip).join("");
+}
+
+async function loadReady(force = false) {
+  try {
+    const report = await api(`/api/ready${force ? "?refresh=1" : ""}`);
+    renderReady(report);
+    return report;
+  } catch (error) {
+    const bar = $("#ready-bar");
+    bar.classList.remove("is-loading");
+    bar.dataset.state = "down";
+    $("#ready-headline").textContent = "检查没跑起来";
+    $("#ready-detail").textContent = error.message;
+    return null;
+  }
+}
+
+async function runReadyAction(button) {
+  const action = button.dataset.action;
+  if (!action) return;
+
+  if (action === "open_settings") { showView("settings"); return; }
+  if (action === "login_xiaohongshu") {
+    showView("publish");
+    await loadPublish();
+    await requestQrcode("xiaohongshu");
+    return;
+  }
+
+  const platform = action.includes("douyin") ? "douyin" : "xiaohongshu";
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "处理中…";
+  try {
+    const result = action.startsWith("enable_")
+      ? await api("/api/ready/toggle", {
+        method: "POST",
+        body: JSON.stringify({ platform, enabled: true }),
+      })
+      : await api("/api/ready/start", {
+        method: "POST",
+        body: JSON.stringify({ target: platform }),
+      });
+    toast(result.message || "已处理");
+    if (result.ready) renderReady(result.ready);
+    else await loadReady(true);
+  } catch (error) {
+    toast(error.message, true);
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
 /* ------------------------------------------------------------------ 工作台 */
 
 async function loadDashboard() {
+  // 体检要两三秒，不能挡住下面的数字卡片，所以不 await
+  loadReady();
   const [data, review] = await Promise.all([
     api("/api/dashboard"),
     api("/api/review/counts").catch(() => ({ pending: 0 })),
@@ -301,7 +408,7 @@ function renderStage(detail) {
     $("#stage-player").innerHTML = `<div class="placeholder">左侧选一条，成片会出现在这里</div>`;
     $("#stage-checks").innerHTML = "";
     $("#stage-verdict").className = "verdict-banner";
-    $("#stage-verdict").innerHTML = `<span class="dot"></span><div><strong>等待选择</strong><small>预检结论会显示在这里</small></div>`;
+    $("#stage-verdict").innerHTML = `<span class="dot"></span><div><strong>等待选择</strong><small>检查结论会显示在这里</small></div>`;
     $("#stage-script-wrap").classList.add("hidden");
     stage.dataset.level = "";
     return;
@@ -320,17 +427,27 @@ function renderStage(detail) {
 
   const banner = $("#stage-verdict");
   banner.className = `verdict-banner ${ledClass(precheck.level)}`;
-  banner.innerHTML = `<span class="dot"></span><div><strong>${escapeHtml(LEVEL_LABEL[precheck.level] || "待检")}</strong><small>${escapeHtml(precheck.summary || "还没做预检")}</small></div>`;
+  const summary = precheck.summary || "还没做检查";
+  // 结论只说"是什么"没用，要接一句"所以现在该干嘛"
+  const nextStep = precheck.level === "blocking"
+    ? "改完点右上角「重新检查」再看一次"
+    : precheck.level === "warn" ? "这些不影响发，觉得没问题就可以通过" : "";
+  banner.innerHTML = `<span class="dot"></span><div><strong>${escapeHtml(LEVEL_LABEL[precheck.level] || "待检")}</strong>
+    <small>${escapeHtml(summary)}${nextStep ? ` · ${escapeHtml(nextStep)}` : ""}</small></div>`;
 
   const ordered = [...precheck.blocking, ...precheck.warn, ...precheck.ok.slice(0, 4)];
   $("#stage-checks").innerHTML = ordered.length
-    ? ordered.map((check) => `
+    ? ordered.map((check) => {
+      const fix = check.level === "ok" ? "" : CHECK_FIX[check.id];
+      return `
       <div class="check-item ${escapeHtml(check.level)}">
         <span class="bulb"></span>
-        <div><span class="label">${escapeHtml(check.label)}</span> · <span class="detail">${escapeHtml(check.detail)}</span></div>
-        <span class="tag-lv">${escapeHtml(check.level === "ok" ? "OK" : check.level.toUpperCase())}</span>
-      </div>`).join("")
-    : `<div class="empty" style="padding:18px"><strong>没有预检结果</strong>点右上角「重跑预检」</div>`;
+        <div><span class="label">${escapeHtml(check.label)}</span> · <span class="detail">${escapeHtml(check.detail)}</span>
+          ${fix ? `<small class="fix">怎么办：${escapeHtml(fix)}</small>` : ""}</div>
+        <span class="tag-lv">${escapeHtml(LEVEL_TAG[check.level] || check.level)}</span>
+      </div>`;
+    }).join("")
+    : `<div class="empty" style="padding:18px"><strong>还没有检查结果</strong>点右上角「重新检查」</div>`;
 
   $("#stage-script-wrap").classList.remove("hidden");
   $("#stage-script").value = detail.script || "";
@@ -644,8 +761,209 @@ async function openNewTask() {
     return;
   }
   fillPropertyOptions(state.propertyOptions);
+  resetQuick();
+  openDialog("quick-dialog");
+  setTimeout(() => $("#quick-query")?.focus(), 150);
+}
+
+function openAdvancedTask() {
+  closeDialog("quick-dialog");
+  fillPropertyOptions(state.propertyOptions);
   openDialog("task-dialog");
 }
+
+/* ------------------------------------------------------------------ 快速出片 */
+
+// 三步里任何一步没完成，按钮就不亮——比让人点了报错友好。
+const quick = { clip: null, upload: null, chosen: null, query: "", options: {}, timer: null };
+
+function resetQuick() {
+  quick.clip = null;
+  quick.upload = null;
+  quick.chosen = null;
+  quick.query = "";
+  clearTimeout(quick.timer);
+  $("#quick-video").value = "";
+  $("#quick-file-name").textContent = "";
+  $("#quick-query").value = "";
+  $("#quick-matches").innerHTML = "";
+  $("#quick-progress").classList.add("hidden");
+  $("#quick-progress-bar").style.width = "0%";
+  $("#quick-step-video").classList.remove("done");
+  $("#quick-step-property").classList.remove("done");
+  $("#quick-submit").disabled = true;
+  $("#quick-summary").textContent = "选好视频、确认房源，就可以开始。";
+}
+
+function humanSize(bytes) {
+  const mb = Number(bytes || 0) / 1024 / 1024;
+  if (mb >= 1) return `${mb.toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+function quickSummary() {
+  const parts = [];
+  if (quick.clip) parts.push(`视频已就绪（${humanSize(quick.clip.size)}）`);
+  if (quick.chosen) parts.push(`房源：<strong>${escapeHtml(quick.chosen.label)}</strong>`);
+  $("#quick-summary").innerHTML = parts.length === 2
+    ? `${parts[0]}，${parts[1]}。点右下角「开始出片」，出完会进审核台等你确认。`
+    : "选好视频、确认房源，就可以开始。";
+  $("#quick-submit").disabled = !(quick.clip && quick.chosen);
+}
+
+/** 上传视频。用 XHR 是为了拿到上传进度——2 GB 的片子没有进度条会让人以为卡死。 */
+function uploadQuickClip(file) {
+  return new Promise((resolve, reject) => {
+    const form = new FormData();
+    form.append("video", file);
+    form.append("channel", "desktop");
+
+    const bar = $("#quick-progress-bar");
+    $("#quick-progress").classList.remove("hidden");
+    bar.style.width = "0%";
+
+    const request = new XMLHttpRequest();
+    request.open("POST", "/api/channel/clips");
+    request.upload.addEventListener("progress", (event) => {
+      if (!event.lengthComputable) return;
+      bar.style.width = `${Math.round((event.loaded / event.total) * 100)}%`;
+    });
+    request.addEventListener("load", () => {
+      let payload = null;
+      try { payload = JSON.parse(request.responseText); } catch { /* 下面统一报错 */ }
+      if (request.status >= 400 || !payload) {
+        reject(new Error(payload?.detail || `上传失败（${request.status}）`));
+        return;
+      }
+      bar.style.width = "100%";
+      resolve(payload);
+    });
+    request.addEventListener("error", () => reject(new Error("上传中断，检查网络后重试")));
+    request.send(form);
+  });
+}
+
+async function pickQuickVideo(file) {
+  if (!file) return;
+  if (!/\.(mp4|mov|m4v|avi|mkv)$/i.test(file.name)) {
+    toast("只支持 MP4 / MOV / M4V / AVI / MKV", true);
+    return;
+  }
+  $("#quick-file-name").textContent = `正在上传：${file.name}`;
+  $("#quick-step-video").classList.add("done");
+  if (quick.clip) {
+    // 换视频时把上一段撤掉，避免占着 inbox 不放
+    api(`/api/channel/clips/${quick.clip.id}`, { method: "DELETE" }).catch(() => {});
+    quick.clip = null;
+    quickSummary();
+  }
+  try {
+    const result = await uploadQuickClip(file);
+    quick.clip = result.clip;
+    $("#quick-file-name").textContent = `已上传：${file.name}`;
+    $("#quick-progress").classList.add("hidden");
+    quickSummary();
+    $("#quick-query").focus();
+  } catch (error) {
+    $("#quick-step-video").classList.remove("done");
+    $("#quick-file-name").textContent = "";
+    $("#quick-progress").classList.add("hidden");
+    toast(error.message, true);
+  }
+}
+
+function renderQuickMatches(result) {
+  const box = $("#quick-matches");
+  const step = $("#quick-step-property");
+  quick.options = {};
+
+  if (result.status === "matched") {
+    quick.chosen = result.property;
+    quick.options[result.property.property_id] = result.property.label;
+    step.classList.add("done");
+    box.innerHTML = `<button type="button" class="quick-match chosen" data-pick="${escapeHtml(result.property.property_id)}">
+      就是这套：${escapeHtml(result.property.label)}<small>已选中</small></button>`;
+    quickSummary();
+    return;
+  }
+
+  if (result.status === "ambiguous") {
+    quick.chosen = null;
+    step.classList.remove("done");
+    result.candidates.forEach((item) => { quick.options[item.property_id] = item.label; });
+    box.innerHTML = `<div class="quick-empty">找到 ${result.candidates.length} 套相近的，点一下选对的那套：</div>`
+      + result.candidates.map((item) => `<button type="button" class="quick-match" data-pick="${escapeHtml(item.property_id)}">
+        ${escapeHtml(item.label)}<small>${item.status === "needs_review" ? "待确认" : ""}</small></button>`).join("");
+    quickSummary();
+    return;
+  }
+
+  quick.chosen = null;
+  step.classList.remove("done");
+  box.innerHTML = `<div class="quick-empty">${escapeHtml(result.hint || "没找到这套房源。打「区 + 楼栋 + 房号」再试，比如 F区 F14 202-2")}</div>`;
+  quickSummary();
+}
+
+async function queryQuickProperty(text) {
+  const keyword = (text || "").trim();
+  if (keyword.length < 2) {
+    $("#quick-matches").innerHTML = "";
+    quick.chosen = null;
+    $("#quick-step-property").classList.remove("done");
+    quickSummary();
+    return;
+  }
+  try {
+    const result = await api(`/api/channel/resolve?q=${encodeURIComponent(keyword)}`);
+    // 打字快的时候旧请求可能后到，用当前输入值挡一下
+    if ($("#quick-query").value.trim() !== keyword) return;
+    renderQuickMatches(result);
+  } catch (error) {
+    $("#quick-matches").innerHTML = `<div class="quick-empty">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function chooseQuickCandidate(propertyId) {
+  const node = $(`#quick-matches [data-pick="${propertyId}"]`);
+  if (!node) return;
+  quick.chosen = { property_id: propertyId, label: quick.options[propertyId] || node.textContent.trim() };
+  $("#quick-step-property").classList.add("done");
+  $$("#quick-matches .quick-match").forEach((item) => item.classList.toggle("chosen", item === node));
+  quickSummary();
+}
+
+async function submitQuick() {
+  if (!quick.clip || !quick.chosen) return;
+  const button = $("#quick-submit");
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "正在建任务…";
+  try {
+    const bound = await api(`/api/channel/clips/${quick.clip.id}/bind`, {
+      method: "POST",
+      body: JSON.stringify({ property_id: quick.chosen.property_id }),
+    });
+    if (bound.status !== "bound") {
+      renderQuickMatches(bound);
+      toast("房源没定下来，再选一次", true);
+      return;
+    }
+    const task = bound.task;
+    button.textContent = "正在提交出片…";
+    await api(`/api/tasks/${task.id}/render`, { method: "POST" });
+    closeDialog("quick-dialog");
+    toast(`${task.task_no} 已开始出片，好了会进审核台`);
+    showView("tasks");
+    loadTasks();
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    button.textContent = original;
+    button.disabled = !(quick.clip && quick.chosen);
+  }
+}
+
+/* ------------------------------------------------------------------ 任务对话框 */
 
 function applyTaskDetail(task, initial = true) {
   state.currentTask = task;
@@ -879,13 +1197,13 @@ $("#btn-rerun").addEventListener("click", async () => {
   if (!taskId) return;
   const button = $("#btn-rerun");
   button.disabled = true;
-  button.textContent = "预检中…";
+  button.textContent = "检查中…";
   try {
     await api(`/api/review/${taskId}/precheck`, { method: "POST" });
     await selectReview(taskId);
-    toast("预检已更新");
+    toast("检查完了，结论已更新");
   } catch (error) { toast(error.message, true); }
-  finally { button.disabled = false; button.textContent = "重跑预检"; }
+  finally { button.disabled = false; button.textContent = "重新检查"; }
 });
 
 // 发布
@@ -1075,6 +1393,11 @@ document.addEventListener("drop", (event) => {
   $("#drop-veil").classList.remove("on");
   const file = event.dataTransfer?.files?.[0];
   if (!file) return;
+  // 快速出片对话框里拖进来的应该是视频，不是房源表；两者都别抢错
+  if (event.target.closest?.("#quick-drop")) {
+    pickQuickVideo(file);
+    return;
+  }
   if (!/\.(xlsx|xlsm)$/i.test(file.name)) {
     toast("只支持 .xlsx / .xlsm", true);
     return;
@@ -1099,6 +1422,53 @@ document.addEventListener("dragleave", (event) => {
 });
 
 /* ------------------------------------------------------------------ 启动 */
+
+$("#ready-refresh").addEventListener("click", async () => {
+  const button = $("#ready-refresh");
+  button.disabled = true;
+  button.textContent = "检查中…";
+  await loadReady(true);
+  button.disabled = false;
+  button.textContent = "重新检查";
+});
+
+$("#ready-chips").addEventListener("click", (event) => {
+  const chip = event.target.closest(".ready-chip.can-fix");
+  if (chip) runReadyAction(chip);
+});
+
+/* ------------------------------------------------------------------ 快速出片事件 */
+
+$("#quick-video").addEventListener("change", (event) => {
+  pickQuickVideo(event.target.files?.[0]);
+});
+
+$("#quick-drop").addEventListener("dragover", (event) => {
+  event.preventDefault();
+  $("#quick-drop").classList.add("dragover");
+});
+$("#quick-drop").addEventListener("dragleave", () => {
+  $("#quick-drop").classList.remove("dragover");
+});
+
+$("#quick-query").addEventListener("input", (event) => {
+  clearTimeout(quick.timer);
+  const value = event.target.value;
+  // 打字时不要每敲一下就查一次库，停手 320ms 再查
+  quick.timer = setTimeout(() => queryQuickProperty(value), 320);
+});
+
+$("#quick-matches").addEventListener("click", (event) => {
+  const pick = event.target.closest("[data-pick]");
+  if (pick) chooseQuickCandidate(pick.dataset.pick);
+});
+
+$("#quick-advanced").addEventListener("click", () => openAdvancedTask());
+
+$("#quick-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  submitQuick();
+});
 
 Promise.all([loadDashboard(), loadProperties(), loadTasks(), loadSettings()])
   .catch((error) => toast(`初始化失败：${error.message}`, true));
