@@ -1362,18 +1362,7 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
-/* ------------------------------------------------------------------ 视觉细节 */
-
-// 背景光晕跟随鼠标。用 rAF 节流，避免 mousemove 打满主线程。
-let glowFrame = null;
-document.addEventListener("mousemove", (event) => {
-  if (glowFrame) return;
-  glowFrame = requestAnimationFrame(() => {
-    document.body.style.setProperty("--mx", `${(event.clientX / window.innerWidth) * 100}%`);
-    document.body.style.setProperty("--my", `${(event.clientY / window.innerHeight) * 100}%`);
-    glowFrame = null;
-  });
-});
+/* ------------------------------------------------------------------ 拖拽导入 */
 
 // 整页拖拽导入 Excel：中介最常见的动作是"从文件夹把表拖进来"
 let dragDepth = 0;
