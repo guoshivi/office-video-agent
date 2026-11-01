@@ -769,6 +769,7 @@ async function openNewTask() {
 function openAdvancedTask() {
   closeDialog("quick-dialog");
   fillPropertyOptions(state.propertyOptions);
+  resetDurationField();
   openDialog("task-dialog");
 }
 
@@ -1113,6 +1114,7 @@ $("#task-form").addEventListener("submit", async (event) => {
     const task = await api("/api/tasks", { method: "POST", body: new FormData(form) });
     closeDialog("task-dialog");
     form.reset();
+    resetDurationField();
     await Promise.all([loadTasks(), loadDashboard()]);
     toast("视频已上传，口播草稿已生成");
     await openTask(task.id);
@@ -1306,9 +1308,117 @@ $("#excel-drop input").addEventListener("change", (event) => {
   $("#excel-file-name").textContent = event.target.files[0]?.name || "";
   $("#import-result").classList.add("hidden");
 });
-$("#video-input").addEventListener("change", (event) => {
+/* ------------------------------------------------------------------ 原片时长 */
+
+/* 浏览器自己就能读文件时长，不必等后端 ffprobe（那台机器上本来也没装）。
+   MOV/AVI 偶有读不出的情况（duration 是 Infinity 或直接 error），当没读到处理。 */
+function probeVideoDuration(file) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const probe = document.createElement("video");
+    let settled = false;
+    const done = (value) => {
+      if (settled) return;
+      settled = true;
+      URL.revokeObjectURL(url);
+      resolve(value);
+    };
+    probe.preload = "metadata";
+    probe.onloadedmetadata = () => done(Number.isFinite(probe.duration) ? probe.duration : 0);
+    probe.onerror = () => done(0);
+    // 元数据迟迟不来时别让按钮一直转圈
+    setTimeout(() => done(0), 8000);
+    probe.src = url;
+  });
+}
+
+const durationInput = () => $("#target-duration");
+const durationButton = () => $("#use-source-duration");
+
+let sourceSeconds = 0;      // 当前视频的真实长度
+let autoFilledSeconds = 0;  // 上一次由「跟原片」填进去的值，用来判断用户有没有手动改过
+
+function renderDurationButton(seconds) {
+  sourceSeconds = seconds || 0;
+  const button = durationButton();
+  if (!sourceSeconds) {
+    button.disabled = true;
+    button.classList.remove("on");
+    button.textContent = "跟原片";
+    button.title = "读不出这段视频的长度，请手动填";
+    return;
+  }
+  button.disabled = false;
+  button.textContent = `跟原片（${Math.round(sourceSeconds)} 秒）`;
+  button.title = `按原视频的 ${Math.round(sourceSeconds)} 秒出片`;
+}
+
+function clampDuration(seconds) {
+  return Math.min(180, Math.max(10, Math.round(seconds)));
+}
+
+// 每次打开表单都是干净的：清掉上一次的视频和时长状态
+function resetDurationField() {
+  $("#video-input").value = "";
+  $("#video-file-name").textContent = "MP4、MOV、M4V、AVI、MKV，单个不超过 2 GB";
+  autoFilledSeconds = 0;
+  renderDurationButton(0);
+  durationButton().classList.remove("on");
+}
+
+function applySourceDuration() {
+  if (!sourceSeconds) return;
+  const seconds = clampDuration(sourceSeconds);
+  durationInput().value = seconds;
+  autoFilledSeconds = seconds;
+  durationButton().classList.add("on");
+  if (seconds !== Math.round(sourceSeconds)) {
+    toast(`原片 ${Math.round(sourceSeconds)} 秒，超过上限，按 ${seconds} 秒出片`);
+  } else {
+    toast(`目标时长已设为原片长度 ${seconds} 秒`);
+  }
+}
+
+$("#use-source-duration").addEventListener("click", applySourceDuration);
+
+// 手动改过就不再算「跟原片」，按钮恢复未选中
+$("#target-duration").addEventListener("input", () => {
+  if (Number(durationInput().value) !== autoFilledSeconds) {
+    durationButton().classList.remove("on");
+    autoFilledSeconds = 0;
+  }
+});
+
+$("#video-input").addEventListener("change", async (event) => {
   const file = event.target.files[0];
   $("#video-file-name").textContent = file ? `${file.name} · ${(file.size / 1024 / 1024).toFixed(1)} MB` : "未选择视频";
+  if (!file) {
+    renderDurationButton(0);
+    return;
+  }
+  const wasAuto = autoFilledSeconds;
+  const seconds = await probeVideoDuration(file);
+  renderDurationButton(seconds);
+
+  // 之前就是「跟原片」填的、且用户没动过 → 换了视频就跟着换
+  if (seconds && wasAuto && Number(durationInput().value) === wasAuto) {
+    durationInput().value = clampDuration(seconds);
+    autoFilledSeconds = clampDuration(seconds);
+    durationButton().classList.add("on");
+    return;
+  }
+  // 目标比素材还长，说明做不到。直接按素材长度来，别让人设了 45 却出 25 秒。
+  if (seconds && Number(durationInput().value) > Math.round(seconds)) {
+    const target = clampDuration(seconds);
+    durationInput().value = target;
+    autoFilledSeconds = target;
+    durationButton().classList.add("on");
+    toast(
+      target === Math.round(seconds)
+        ? `这段视频只有 ${Math.round(seconds)} 秒，目标时长已按原片改为 ${target} 秒`
+        : `这段视频只有 ${Math.round(seconds)} 秒，不足 ${target} 秒下限，出片会比目标短`,
+    );
+  }
 });
 
 // 命令面板
