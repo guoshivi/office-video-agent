@@ -416,7 +416,7 @@ def render_task(task_id: str) -> None:
     if task is None:
         return
     with RENDER_LOCK:
-        engine = str(get_settings().get("render_engine") or "workbench").strip().lower()
+        engine = str(get_settings().get("render_engine") or "local").strip().lower()
         if engine == "local":
             _render_locally(task_id, task, "按设置使用本地渲染引擎")
             return

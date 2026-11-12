@@ -3,6 +3,8 @@
 刻意不打的：
 - .venv / models / data 下的业务数据 —— 几百 MB 到几 GB，另一台机器重建更快
 - vendor 里的发布工具 exe 和 cookies.json —— 第三方二进制 + 登录凭据，绝不能外带
+- 例外：vendor/ffmpeg 里的 ffmpeg/ffprobe 要带上。出片离不开它，而且必须是带
+  libass + libx264 的那一类；让人自己去装一个，版本不对就是一片黑屏加报错。
 - .env —— 里面有 key 和本机路径
 
 保留 data/render-env（字体 + fontconfig），因为渲染字幕要用，而且字体是从 OTF
@@ -22,8 +24,13 @@ ARCHIVE = BASE / f"房源视频助手-源码-{date.today():%Y%m%d}.zip"
 # 整个目录跳过
 SKIP_DIRS = {
     ".venv", ".git", ".pytest_cache", ".pytest-data", ".workbuddy", ".idea", ".vscode",
-    "__pycache__", "node_modules", "build", "dist", "models", "vendor",
+    "__pycache__", "node_modules", "build", "dist", "models",
     "data",
+}
+# vendor 里只带 ffmpeg：发布工具是第三方二进制 + 登录凭据，不能外带
+VENDOR_KEEP = {
+    "ffmpeg/ffmpeg.exe",
+    "ffmpeg/ffprobe.exe",
 }
 # data 里只带渲染环境（字体、fontconfig），其他都是本机业务数据和缓存
 DATA_KEEP = {
@@ -44,7 +51,8 @@ SETUP = """# 另一台电脑上怎么跑起来
 ## 1. 环境
 
 - Windows 10/11，**Python 3.12**（3.13 有些依赖轮子还没有）
-- **FFmpeg**：`winget install Gyan.FFmpeg`，装完新开一个终端让 PATH 生效
+- FFmpeg **已经随包**放在 `vendor/ffmpeg/`，不用装、也不要删；
+  真丢了就跑 `python tools\fetch_ffmpeg.py` 重新取
 
 ## 2. 装依赖
 
@@ -76,6 +84,9 @@ python -m venv .venv
 ```
 
 不下模型也能用主流程（上传 → 文案 → 出片），只是「参考视频模仿」和「语义搜索」不可用。
+
+出片要的三个组件（`edge-tts`、`numpy`、`opencv`）在 requirements.txt 里，
+第 2 步装依赖就会带上。真缺了，网页首页「出片」那一项会直接说缺什么，点一下就能装。
 
 ## 4. 配置
 
@@ -124,7 +135,8 @@ start.bat
 
 - 房源数据库、上传的视频、成片（都在 `data/` 下，属业务数据）
 - 大模型权重（`models/`）
-- 小红书/抖音发布工具的 exe（`vendor/`，用 `tools/fetch_publish_tools.py` 重新取）
+- 小红书/抖音发布工具的 exe（`vendor/xhs-mcp`，用 `tools/fetch_publish_tools.py` 重新取）
+- 注意：`vendor/ffmpeg` 是**带上了的**，它属于出片必需品
 - `.env` 和任何 API Key
 """
 
@@ -134,6 +146,8 @@ def _skip(relative: Path) -> bool:
     # data 要单独判：只有渲染环境那几个文件带，其它业务数据不带
     if parts[0] == "data":
         return "/".join(parts[1:]) not in DATA_KEEP
+    if parts[0] == "vendor":
+        return "/".join(parts[1:]) not in VENDOR_KEEP
     if any(part in SKIP_DIRS for part in parts[:-1]):
         return True
     name = relative.name

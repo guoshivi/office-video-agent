@@ -1,3 +1,4 @@
+# 网页与业务
 fastapi>=0.115,<1
 uvicorn[standard]>=0.32,<1
 openpyxl>=3.1,<4
@@ -5,3 +6,9 @@ python-multipart>=0.0.20,<1
 httpx>=0.27,<1
 python-dotenv>=1.0,<2
 lark-oapi>=1.4,<2
+
+# 本机出片：这三个缺一个，出片就会直接报错退出
+# （edge_tts 生成口播，numpy/opencv 做智能选镜——挑干净、不糊、不糊脸的空镜）
+edge-tts>=6.1,<8
+numpy>=1.26,<3
+opencv-python-headless>=4.9,<5

@@ -1699,3 +1699,23 @@ kbd {
   background: var(--surface-2, rgba(255, 255, 255, 0.02));
 }
 .settings-group-title { margin: 0; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); }
+
+/* 「高级」折叠块：默认收起，只留一句「一般不用动」。
+   默认路径之外的东西不该摆在第一眼，否则不懂的人会以为自己选错了。 */
+.settings-more {
+  border-top: 1px dashed var(--line);
+  padding-top: 10px;
+}
+.settings-more > summary {
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--text-3);
+  list-style: none;
+  padding: 4px 0;
+}
+.settings-more > summary::-webkit-details-marker { display: none; }
+.settings-more > summary::before { content: "▸ "; }
+.settings-more[open] > summary::before { content: "▾ "; }
+.settings-more > summary:hover { color: var(--text-2); }
+.settings-more[open] { display: grid; gap: 14px; }
+.settings-more[open] > summary { margin-bottom: 2px; }

@@ -28,6 +28,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import uuid
 from pathlib import Path
 
 from .asr import _windows_path
@@ -50,12 +51,12 @@ FONT_FALLBACK = Path(r"C:\Windows\Fonts\msyhbd.ttc")
 
 TTS_VOICE = "zh-CN-XiaoxiaoNeural"
 TTS_RATE = "+10%"          # 中介口播普遍偏快，慢了反而假
-CAPTION_SIZE = 76
-CAPTION_BOTTOM = 1372      # 字幕行的顶部 y（1080x1920 画布）
-LABEL_SIZE = 84
-LABEL_SUB_SIZE = 50
+CAPTION_SIZE = 66
+CAPTION_BORDER = 6
+CAPTION_MARGIN_V = 260      # 字幕距画面底边的距离（1080x1920 画布）
+LABEL_SIZE = 78
 LABEL_X = 90
-LABEL_Y = 350
+LABEL_Y = 340
 
 AUDIO_MODES = {"mix", "original", "voice", "mute"}
 
@@ -181,40 +182,84 @@ def _font_param(font: str) -> str:
     return font.replace("\\", "/").replace(":", "\\:")
 
 
-def _caption_drawtext(index: int, text: str, start: float, end: float, font: str) -> str:
+# ------------------------------------------------------------------ 字幕（ASS）
+
+# 为什么不用 drawtext：它只能整句一个颜色。中介的片子里「120 平」「3 隔」
+# 这类数字是卖点，得挑出来变色，drawtext 做不到；而 libass 一行标签就解决了，
+# 顺带把描边、行距、位置都交给样式表管，不用在代码里拼字符串。
+_HIGHLIGHT_OPEN = r"{\c&H00D7FF&}"    # 金色（ASS 是 BGR：00D7FF = #FFD700）
+_HIGHLIGHT_CLOSE = r"{\c&HFFFFFF&}"
+
+# 单价、面积、格局、楼层这些才是看房的人会抓的词，其余一律白字
+_KEYWORD = re.compile(
+    r"\d+(?:\.\d+)?\s*(?:平方米|平方|平米|平|㎡|元/平方米|元/平|元|万|层|个工位|工位|隔|年|号线|号楼)"
+)
+
+
+def _ass_text(text: str) -> str:
+    """ASS 的正文要转义，换行用 \\N，大括号是标签起始符。"""
     return (
-        f"drawtext=fontfile='{_font_param(font)}'"
-        f":text='{_escape(_wrap(text))}'"
-        f":fontsize={CAPTION_SIZE}:fontcolor=white"
-        f":borderw=6:bordercolor=black"
-        f":shadowx=2:shadowy=4:shadowcolor=black@0.45"
-        f":line_spacing=14"
-        f":x=(w-text_w)/2:y={CAPTION_BOTTOM}"
-        f":enable='between(t,{start:.2f},{end:.2f})'"
+        text.replace("\\", "＼")
+        .replace("{", "（")
+        .replace("}", "）")
     )
 
 
-def _label_drawtexts(index: int, title: str, sub: str, start: float, end: float, font: str) -> list[str]:
-    items = [
-        f"drawtext=fontfile='{_font_param(font)}'"
-        f":text='{_escape(title)}'"
-        f":fontsize={LABEL_SIZE}:fontcolor=white"
-        f":borderw=5:bordercolor=black@0.75"
-        f":shadowx=1:shadowy=3:shadowcolor=black@0.4"
-        f":x={LABEL_X}:y={LABEL_Y}"
-        f":enable='between(t,{start:.2f},{end:.2f})'"
-    ]
-    if sub:
-        items.append(
-            f"drawtext=fontfile='{_font_param(font)}'"
-            f":text='{_escape(sub)}'"
-            f":fontsize={LABEL_SUB_SIZE}:fontcolor=white"
-            f":borderw=4:bordercolor=black@0.7"
-            f":shadowx=1:shadowy=2:shadowcolor=black@0.4"
-            f":x={LABEL_X + 4}:y={LABEL_Y + LABEL_SIZE + 26}"
-            f":enable='between(t,{start:.2f},{end:.2f})'"
-        )
-    return items
+def _highlight(text: str, limit: int = 2) -> str:
+    """给一句话里最值钱的词上色，一句最多两处——多了就成花瓜了。"""
+    count = 0
+
+    def wrap(match: re.Match) -> str:
+        nonlocal count
+        if count >= limit:
+            return match.group(0)
+        count += 1
+        return f"{_HIGHLIGHT_OPEN}{match.group(0)}{_HIGHLIGHT_CLOSE}"
+
+    return _KEYWORD.sub(wrap, _ass_text(text))
+
+
+def _ass_time(seconds: float) -> str:
+    seconds = max(seconds, 0.0)
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = seconds % 60
+    return f"{hours}:{minutes:02d}:{secs:05.2f}"
+
+
+def build_ass(sentences: list[dict], canvas: tuple[int, int], font_name: str) -> str:
+    """把分镜写成一份 ASS 字幕文件。一句话一条 Dialogue。"""
+    width, height = canvas
+    header = f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: {width}
+PlayResY: {height}
+WrapStyle: 2
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Cap,{font_name},{CAPTION_SIZE},&H00FFFFFF,&H000000FF,&H00000000,&H78000000,-1,0,0,0,100,100,1,0,1,{CAPTION_BORDER},3,2,70,70,{CAPTION_MARGIN_V},1
+Style: Label,{font_name},{LABEL_SIZE},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,1,0,1,5,4,7,{LABEL_X},{LABEL_X},{LABEL_Y},1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+    lines = []
+    for sentence in sentences:
+        start = _ass_time(sentence["start"])
+        end = _ass_time(sentence["end"])
+        # 先按标点折行，再逐行上色：跨行的词不会被拆成半个颜色
+        wrapped = _wrap(sentence["text"]).split("\n")
+        text = r"\N".join(_highlight(line) for line in wrapped)
+        lines.append(f"Dialogue: 0,{start},{end},Cap,,0,0,0,,{text}")
+        label = sentence.get("label") or {}
+        if label.get("title"):
+            title = _ass_text(label["title"])
+            sub = _ass_text(label.get("sub") or "")
+            body = f"{title}\\N{sub}" if sub else title
+            lines.append(f"Dialogue: 0,{start},{end},Label,,0,0,0,,{body}")
+    return header + "\n".join(lines) + "\n"
 
 
 # ------------------------------------------------------------------ 画面滤镜
@@ -307,7 +352,13 @@ def render_storyboard(
         audio_mode = "voice" if len(storyboard) else "mute"
         want_voice = audio_mode == "voice"
     ffmpeg = _ffmpeg()
-    font = str(FONT_BLACK if FONT_BLACK.is_file() else (FONT_BODY if FONT_BODY.is_file() else FONT_FALLBACK))
+    # 字体：给 libass 的是「字体家族名」，它自己去 fontsdir 里找匹配的
+    if FONT_BLACK.is_file():
+        font_family = "Noto Sans SC Black"
+    elif FONT_BODY.is_file():
+        font_family = "Noto Sans SC"
+    else:
+        font_family = "Microsoft YaHei"
 
     work = Path(tempfile.mkdtemp(prefix="ova-render-"))
 
@@ -331,8 +382,11 @@ def render_storyboard(
         # 有目标时长就按目标铺：短文案多留空镜呼吸，长文案不硬压
         goal = max(goal_seconds or 0.0, natural)
         per = goal / max(len(sentences), 1)
+        # 每句 10 秒是"别让一个镜头干等"的上限，但它不能跟目标时长打架：
+        # 目标 45 秒、只剩 4 句时，per=11.25，硬按 10 秒卡就只剩 40 秒。
+        cap = max(10.0, per)
         for sentence in sentences:
-            sentence["duration"] = min(max(sentence["spoken"] + 0.6, per), 10.0)
+            sentence["duration"] = min(max(sentence["spoken"] + 0.6, per), cap)
     else:
         duration_total = video_duration(source)
         even = min(max((goal_seconds or duration_total / max(len(storyboard), 1)), 1.6), 10.0)
@@ -384,13 +438,14 @@ def render_storyboard(
     concat_in = "".join(f"[v{i}]" for i in range(len(plan)))
     video_parts.append(f"{concat_in}concat=n={len(plan)}:v=1:a=0[base]")
 
-    overlays = []
-    for index, sentence in enumerate(sentences):
-        overlays.append(_caption_drawtext(index, sentence["text"], sentence["start"], sentence["end"], font))
-        label = sentence["label"]
-        if label.get("title"):
-            overlays.extend(_label_drawtexts(index, label["title"], label.get("sub", ""), sentence["start"], sentence["end"], font))
-    video_parts.append("[base]" + ",".join(overlays) + "[vout]")
+    # 2.5) 字幕：写一份 ASS 再一次性烧上去。
+    # 文件名和 fontsdir 都用相对路径、并把 cwd 指到 data/render-env：
+    # ffmpeg 的滤镜参数里冒号是分隔符，Windows 盘符会把参数切碎。
+    ass_name = f"sub-{uuid.uuid4().hex[:8]}.ass"
+    ass_path = DATA_RENDER_DIR / ass_name
+    DATA_RENDER_DIR.mkdir(parents=True, exist_ok=True)
+    ass_path.write_text(build_ass(sentences, canvas, font_family), encoding="utf-8")
+    video_parts.append(f"[base]ass={ass_name}:fontsdir=.[vout]")
 
     # 3) 声音：按 audio_mode 决定原声与口播的去留
     audio_parts: list[str] = []
@@ -411,8 +466,10 @@ def render_storyboard(
             )
             mix_labels.append(f"[s{index}]")
         audio_parts.append(
+            # apad 必须在 atrim 前面：口播最后一句结束得早，不补静音的话
+            # 音轨会比画面短，-shortest 就把画面砍了（目标时长形同虚设）
             "".join(mix_labels) + f"amix=inputs={len(mix_labels)}:normalize=0:duration=longest,"
-            f"atrim=0:{total},asetpts=PTS-STARTPTS[aout]"
+            f"apad=whole_dur={total},atrim=0:{total},asetpts=PTS-STARTPTS[aout]"
         )
     else:  # mix
         # 素材原声常常比成片短（口播把片子拉长了），mix 必须按最长算，
@@ -427,8 +484,10 @@ def render_storyboard(
             )
             mix_labels.append(f"[s{index}]")
         audio_parts.append(
+            # apad 必须在 atrim 前面：口播最后一句结束得早，不补静音的话
+            # 音轨会比画面短，-shortest 就把画面砍了（目标时长形同虚设）
             "".join(mix_labels) + f"amix=inputs={len(mix_labels)}:normalize=0:duration=longest,"
-            f"atrim=0:{total},asetpts=PTS-STARTPTS[aout]"
+            f"apad=whole_dur={total},atrim=0:{total},asetpts=PTS-STARTPTS[aout]"
         )
 
     filter_complex = ";".join(video_parts + audio_parts)
@@ -448,7 +507,14 @@ def render_storyboard(
     ]
     import os
     env = {**os.environ, **_fontconfig_env()}
-    completed = subprocess.run(command, capture_output=True, text=True, check=False, env=env)
+    try:
+        # cwd 指到字体目录：滤镜里的 ass/fontsdir 才能用相对路径（躲开盘符冒号）
+        completed = subprocess.run(
+            command, capture_output=True, text=True, check=False, env=env,
+            cwd=str(DATA_RENDER_DIR),
+        )
+    finally:
+        ass_path.unlink(missing_ok=True)
     if completed.returncode != 0:
         detail = completed.stderr.strip()
         raise RenderError("渲染失败：" + (detail[:900] or "未知错误"))

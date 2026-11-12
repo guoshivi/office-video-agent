@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 import os
 import socket
@@ -38,6 +39,20 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 XHS_EXE = BASE_DIR / "vendor" / "xhs-mcp" / "xiaohongshu-mcp.exe"
 CHROME_PROFILE = DATA_DIR / "chrome-profile"
 DOUYIN_UPLOAD_URL = "https://creator.douyin.com/creator-micro/content/upload"
+
+# 本机出片这条链上真正会缺的东西。少任何一个，出片都会以
+# 「子进程退出码 1：No module named xxx」这种话结束——对使用者等于没说。
+RENDER_MODULES = [
+    ("edge_tts", "口播配音"),
+    ("numpy", "选镜计算"),
+    ("cv2", "画面检测"),
+]
+RENDER_FONT = BASE_DIR / "data" / "render-env" / "NotoSansSCBlack.ttf"
+RENDER_PACKAGES = [
+    "edge-tts>=6.1,<8",
+    "numpy>=1.26,<3",
+    "opencv-python-headless>=4.9,<5",
+]
 
 XHS_PORT = 18060
 CDP_PORT = 9222
@@ -100,13 +115,50 @@ def _find_chrome() -> str:
 # ------------------------------------------------------------------ 体检
 
 def _render_item(settings: dict) -> Item:
-    url = (settings.get("workbench_url") or "").strip()
-    if not url:
+    """出片这一项：默认查本机，只有在明确配了工作台的时候才去连它。
+
+    默认值改成 local 是刻意的。整套东西是要整包拷给别人电脑用的，
+    对面既没有我们的工作台，也不该为了出片先去架一台机器。
+    """
+    engine = (settings.get("render_engine") or "local").strip().lower()
+    if engine == "workbench":
+        url = (settings.get("workbench_url") or "").strip()
+        if url:
+            return _workbench_item(url)
+    return _local_render_item()
+
+
+def _local_render_item() -> Item:
+    missing = [
+        label for module, label in RENDER_MODULES
+        if importlib.util.find_spec(module) is None
+    ]
+    if missing:
         return Item(
             "render", "出片", False,
-            "还没填视频工作台的地址，没法出片",
-            action="open_settings", action_label="去填地址",
+            f"还缺出片组件：{'、'.join(missing)}。装一次就好，之后不用管",
+            action="install_render_deps", action_label="一键装好",
         )
+
+    from .shots import ShotError, _find_binary
+
+    try:
+        _find_binary("ffmpeg")
+        _find_binary("ffprobe")
+    except ShotError:
+        return Item(
+            "render", "出片", False,
+            "找不到 ffmpeg。项目里的 vendor/ffmpeg 是随包带的，可能被清理掉了",
+        )
+    if not RENDER_FONT.is_file():
+        return Item(
+            "render", "出片", False,
+            "缺渲染字体，字幕会变成方块。data/render-env 里的字体别删",
+        )
+    return Item("render", "出片", True, "本机出片就绪，不依赖别的机器")
+
+
+def _workbench_item(url: str) -> Item:
     try:
         # 这是局域网地址，2 秒连不上就是真连不上，别让首页转圈。
         # 路径要和 workbench_client 一致（/api/worker），否则正常的机器也会 404。
@@ -250,6 +302,43 @@ def check(force: bool = False) -> dict:
 
 
 # ------------------------------------------------------------------ 一键修
+
+def install_render_deps() -> dict:
+    """一键装齐出片组件。
+
+    这是「No module named 'edge_tts'」唯一体面的解法：让人去开命令行、
+    进虚拟环境、敲 pip，对不懂电脑的人来说等于让他放弃。
+    """
+    if getattr(sys, "frozen", False):
+        # 打包成 exe 之后没有可用的 pip，只能换一份完整的包
+        return {
+            "ok": False,
+            "message": "这个版本是打包过的，缺组件要换成完整包，找个懂的人重新发一份就行",
+        }
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-m", "pip", "install", *RENDER_PACKAGES],
+            capture_output=True, text=True, timeout=900, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "message": "装得太久没装完，网络可能不太行，过一会儿再点一次"}
+    except OSError as error:
+        return {"ok": False, "message": f"装不上：{error}"}
+
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip().splitlines()
+        tail = detail[-1][:160] if detail else "未知原因"
+        return {"ok": False, "message": f"装失败了（{tail}），检查一下网络再点一次"}
+
+    still_missing = [
+        label for module, label in RENDER_MODULES
+        if importlib.util.find_spec(module) is None
+    ]
+    _CACHE["at"] = 0.0   # 装完立刻重查，别让首页还挂着 20 秒前的红条
+    if still_missing:
+        return {"ok": False, "message": f"装完了但还差 {'、'.join(still_missing)}，重启一下程序再看"}
+    return {"ok": True, "message": "出片组件装好了，现在可以出片"}
+
 
 def start_xiaohongshu() -> dict:
     """把小红书发布服务拉起来。已经在跑就什么都不做。"""

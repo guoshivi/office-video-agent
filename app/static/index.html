@@ -211,22 +211,27 @@
                 <label>默认比例<select name="default_aspect_ratio"><option>9:16</option><option>16:9</option></select></label>
               </div>
               <label>默认声音<select name="default_voice"><option value="female_warm">温暖女声</option><option value="male_professional">专业男声</option></select></label>
-              <label>视频工作台 API 地址<input name="workbench_url" placeholder="http://192.168.x.x:8765"></label>
-              <label>工作台输出目录<input name="workbench_output_root" placeholder="data/workbench_outputs"></label>
-              <label>工作台授权素材根目录<input name="workbench_material_root" placeholder="留空则自动探测"><small>工作台只接受授权 NAS 根目录内的素材与输出，留空时自动读取 /api/roots（会跳过没登录的 NAS）。</small></label>
-              <div class="form-row">
-                <label>渲染引擎<select name="render_engine">
-                  <option value="workbench">工作台（远程机器）</option>
-                  <option value="local">本机 FFmpeg</option>
-                </select></label>
+              <div class="settings-group">
+                <p class="settings-group-title">出片</p>
                 <label>本地出片原声<select name="local_audio_mode">
                   <option value="mix">原声压低 + 口播</option>
                   <option value="original">只保留原声</option>
                   <option value="voice">只要口播</option>
                   <option value="mute">无声</option>
                 </select></label>
+                <p class="section-note">出片、配音、字幕都在这台电脑上完成，不需要另一台机器配合。</p>
+                <details class="settings-more">
+                  <summary>改用远程视频工作台（一般不用动）</summary>
+                  <label>视频工作台 API 地址<input name="workbench_url" placeholder="http://192.168.x.x:8765"></label>
+                  <label>工作台输出目录<input name="workbench_output_root" placeholder="data/workbench_outputs"></label>
+                  <label>工作台授权素材根目录<input name="workbench_material_root" placeholder="留空则自动探测"><small>工作台只接受授权 NAS 根目录内的素材与输出，留空时自动读取 /api/roots（会跳过没登录的 NAS）。</small></label>
+                  <label>渲染引擎<select name="render_engine">
+                    <option value="local">本机 FFmpeg（推荐）</option>
+                    <option value="workbench">工作台（远程机器）</option>
+                  </select><small>选「工作台」要保证那台机器开着、并且和本机在同一个网络；连不上时会自动退回本机出片。</small></label>
+                </details>
               </div>
-              <label>出品目录（成片另存位置）<input name="export_output_root" placeholder="例如 D:\出品 或 data\exports"><small>出片完成后自动复制一份到这里；留空则只保存在系统 data 目录。工作台授权目录在本机不可用时，可把渲染引擎切到「本机 FFmpeg」。</small></label>
+              <label>出品目录（成片另存位置）<input name="export_output_root" placeholder="例如 D:\出品 或 data\exports"><small>出片完成后自动复制一份到这里；留空则只保存在系统 data 目录。</small></label>
               <div class="settings-group">
                 <p class="settings-group-title">AI 文案（可选）</p>
                 <div class="form-row">

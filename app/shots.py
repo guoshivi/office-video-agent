@@ -33,8 +33,18 @@ class ShotError(RuntimeError):
 
 # ------------------------------------------------------------------ ffmpeg
 
+BASE_DIR = Path(__file__).resolve().parent.parent
+# 项目自带的 ffmpeg。整套东西要能整包拷给别人的电脑，就不能指望对面
+# 装过 ffmpeg 或者留着我们开发机上的试验包目录。
+VENDOR_FFMPEG = BASE_DIR / "vendor" / "ffmpeg"
+
+
 def _find_binary(name: str) -> str:
-    """找 ffmpeg/ffprobe：配置 > 环境变量 > PATH > 工作台自带的那个。"""
+    """找 ffmpeg/ffprobe：配置 > 项目自带 > PATH > 历史遗留位置。
+
+    顺序是刻意的：项目自带排在 PATH 前面。否则同一份代码在两台机器上
+    会用两个不同版本的 ffmpeg，出的片子观感不一样，排查起来没完没了。
+    """
     stem = "ffprobe" if "probe" in name else "ffmpeg"
     executable = f"{stem}.exe" if os.name == "nt" else stem
 
@@ -47,11 +57,15 @@ def _find_binary(name: str) -> str:
             return str(candidate)
         raise ShotError(f"配置的 ffmpeg 路径不存在：{configured}")
 
+    bundled = VENDOR_FFMPEG / executable
+    if bundled.is_file():
+        return str(bundled)
+
     found = shutil.which(stem)
     if found:
         return found
 
-    # 本机常见位置：工作台试用包、项目自带 bin
+    # 兼容旧环境：开发机上曾用过的试验包、data/bin
     for root in (Path("D:/video-pipeline-trial"), DATA_DIR / "bin"):
         if not root.is_dir():
             continue
@@ -61,7 +75,10 @@ def _find_binary(name: str) -> str:
         for candidate in root.glob(executable):
             if candidate.is_file():
                 return str(candidate)
-    raise ShotError("找不到 ffmpeg/ffprobe，请在系统设置里填 ffmpeg_path")
+    raise ShotError(
+        f"找不到 {stem}。项目目录下的 vendor/ffmpeg 应该有它；"
+        "丢了就重新放一份，或在系统设置里填 ffmpeg_path"
+    )
 
 
 def _run(command: list[str], timeout: int = 120) -> subprocess.CompletedProcess:

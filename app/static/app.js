@@ -224,6 +224,27 @@ async function runReadyAction(button) {
   if (!action) return;
 
   if (action === "open_settings") { showView("settings"); return; }
+  if (action === "install_render_deps") {
+    // 装组件要一分钟上下，按钮上得一直有反馈，否则会被当成卡死
+    const label = button.textContent;
+    button.disabled = true;
+    button.textContent = "正在装…";
+    try {
+      const result = await api("/api/ready/start", {
+        method: "POST",
+        body: JSON.stringify({ target: "render_deps" }),
+      });
+      toast(result.message || "已处理", !result.ok);
+      if (result.ready) renderReady(result.ready);
+      else await loadReady(true);
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      button.disabled = false;
+      button.textContent = label;
+    }
+    return;
+  }
   if (action === "login_xiaohongshu") {
     showView("publish");
     await loadPublish();
@@ -675,7 +696,7 @@ async function loadSettings() {
     $("#task-form").elements.aspect_ratio.value = settings.default_aspect_ratio;
     $("#task-form").elements.voice.value = settings.default_voice;
   }
-  $("#ffmpeg-status").textContent = health.ffmpeg_available ? "FFmpeg 已加入系统环境变量" : "FFmpeg 未配置；基础任务管理可用";
+  $("#ffmpeg-status").textContent = health.ffmpeg_available ? "FFmpeg 已就绪（随程序自带）" : "FFmpeg 不见了；出片会失败，重装一份完整包";
   $("#ffmpeg-pill").textContent = health.ffmpeg_available ? "可用" : "待配置";
   $("#ffmpeg-pill").className = `status-pill ${health.ffmpeg_available ? "active" : "needs_review"}`;
   $("#workbench-status").textContent = workbench.online

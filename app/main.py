@@ -149,7 +149,7 @@ class SettingsUpdate(BaseModel):
     workbench_url: str = Field(default="", max_length=500)
     workbench_output_root: str = Field(default="", max_length=1000)
     workbench_material_root: str = Field(default="", max_length=1000)
-    render_engine: str = Field(default="workbench", max_length=20)
+    render_engine: str = Field(default="local", max_length=20)
     export_output_root: str = Field(default="", max_length=1000)
     local_audio_mode: str = Field(default="mix", max_length=20)
     # 大模型：留空表示不用 AI，文案走规则版
@@ -157,6 +157,17 @@ class SettingsUpdate(BaseModel):
     llm_api_key: str = Field(default="", max_length=300)
     llm_base_url: str = Field(default="", max_length=300)
     llm_model: str = Field(default="", max_length=120)
+
+
+def _ffmpeg_ready() -> bool:
+    from .shots import ShotError, _find_binary
+
+    try:
+        _find_binary("ffmpeg")
+        _find_binary("ffprobe")
+    except ShotError:
+        return False
+    return True
 
 
 @app.get("/api/health")
@@ -167,7 +178,9 @@ def health():
         "version": __version__,
         "mode": "local",
         "database": "sqlite",
-        "ffmpeg_available": shutil.which("ffmpeg") is not None,
+        # 不只看 PATH：ffmpeg 是随包放在 vendor/ffmpeg 的，
+        # 只认 PATH 会让"明明能出片"的机器显示未配置
+        "ffmpeg_available": _ffmpeg_ready(),
         "workbench_configured": bool(settings.get("workbench_url")),
         "workbench_url": settings.get("workbench_url", ""),
         "semantic_search_configured": is_configured(),
@@ -506,7 +519,9 @@ def start_render(task_id: str, background_tasks: BackgroundTasks):
             (utc_now(), task_id),
         )
     background_tasks.add_task(render_and_enqueue, task_id)
-    return {"message": "已提交视频工作台，正在排队处理", "task": serialize_task(get_task(task_id))}
+    engine = str(get_settings().get("render_engine") or "local").strip().lower()
+    message = "已开始出片，在这台电脑上跑，一会儿就能看" if engine != "workbench" else "已提交视频工作台，正在排队处理"
+    return {"message": message, "task": serialize_task(get_task(task_id))}
 
 
 def render_and_enqueue(task_id: str) -> None:

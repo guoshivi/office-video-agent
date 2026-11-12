@@ -184,11 +184,18 @@ def test_workbench_render_flow():
             ).json()
             settings = client.get("/api/settings").json()
             settings["default_duration"] = int(settings["default_duration"])
-            settings.update({"workbench_url": base_url, "workbench_output_root": str(Path(tempfile.gettempdir()) / "ova-workbench-test")})
+            # 这条用例验的是「接远程工作台」这条路，所以必须显式选工作台：
+            # 默认引擎已经改成本机出片（发给别人的电脑上没有工作台）
+            settings.update({
+                "workbench_url": base_url,
+                "workbench_output_root": str(Path(tempfile.gettempdir()) / "ova-workbench-test"),
+                "render_engine": "workbench",
+            })
             saved = client.put("/api/settings", json={
                 key: settings[key] for key in (
                     "public_contact", "default_duration", "default_aspect_ratio",
                     "default_voice", "workbench_path", "workbench_url", "workbench_output_root",
+                    "render_engine",
                 )
             })
             assert saved.status_code == 200, saved.text
