@@ -1272,6 +1272,27 @@ dialog[open] { animation: dialogIn 0.32s var(--ease-out); }
   gap: 14px;
 }
 .dialog-card.wide { width: min(94vw, 860px); }
+/* 表单项多的弹窗（新建任务、快速出片）在矮屏上自己滚，
+   否则「上传并创建草稿」会被顶出视口，看着像按钮没了 */
+#quick-dialog .dialog-card,
+#import-dialog .dialog-card {
+  max-height: 92vh;
+  overflow-y: auto;
+}
+/* 新建任务表最长：矮屏上只滚表单本身，标题和提交按钮始终留在视野里。
+   整个卡片一起滚的话，「上传并创建草稿」会被顶出屏幕。 */
+#task-dialog .dialog-card {
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: hidden;
+}
+#task-dialog .dialog-card .form-grid {
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 6px;
+}
 
 .detail-card {
   width: min(94vw, 1000px);
@@ -1289,7 +1310,8 @@ dialog[open] { animation: dialogIn 0.32s var(--ease-out); }
 
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }
 .form-grid label { display: grid; gap: 6px; font-size: 12.5px; color: var(--text-2); }
-.form-grid label.full { grid-column: 1 / -1; }
+.form-grid label.full,
+.form-grid .form-field.full { grid-column: 1 / -1; }
 .form-grid label small { font-size: 11px; color: var(--text-3); }
 
 /* 「跟原片」那一格：label 换成 div 才能塞按钮（button 在 label 里
@@ -1826,8 +1848,24 @@ kbd {
 .copy-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .copy-actions { display: flex; align-items: center; gap: 6px; }
 .copy-hint { font-style: normal; font-size: 11.5px; color: var(--text-3); margin-right: 2px; }
-.copy-field textarea { min-height: 132px; line-height: 1.72; resize: vertical; }
+.copy-field textarea { min-height: 112px; line-height: 1.72; resize: vertical; }
 .copy-field small { color: var(--text-3); }
+.copy-field small em { font-style: normal; }
+/* 新建任务里三版横排：竖排会把弹窗顶长，横排一行扫完，点一条直接落进文案框 */
+.version-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+.version-row:empty { display: none; }
+.version-row .version-card strong {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 12.5px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
 
 /* 设置页的分区：五组各一块，组内才用副标题。
    以前是"一个大组里塞六个副标题"，层级只有两级、边界看不出来，

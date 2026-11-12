@@ -501,17 +501,18 @@
           <option value="mute">完全静音</option>
         </select><small>实拍现场有环境音就保留，嘈杂就关掉。</small></label>
         <label>风格<select name="style"><option value="professional">专业简洁</option><option value="warm">自然亲和</option></select></label>
+        <label>说给谁听<select id="task-audience" title="决定开头用哪一类话术"></select><small>换人群，开头会跟着换一套说法。</small></label>
         <div class="form-field full copy-field">
           <div class="copy-head">
             <span>口播文案</span>
             <span class="copy-actions">
-              <em id="copy-model-hint"></em>
-              <button type="button" class="button button-sm button-ghost" id="btn-ai-copy">AI 生成</button>
+              <button type="button" class="button button-sm button-ghost" id="btn-task-versions">出三版</button>
               <button type="button" class="button button-sm button-ghost" id="btn-polish-copy">润色</button>
             </span>
           </div>
-          <textarea name="script" id="task-script" rows="7" placeholder="留空 = 按房源字段自动生成；也可以自己写，或点「AI 生成」写一版再改"></textarea>
-          <small>一句话一行，出片时一句配一个镜头。字幕会自动切成单行短句，跟着语速一段段换。</small>
+          <div class="version-row hidden" id="task-versions"></div>
+          <textarea name="script" id="task-script" rows="5" placeholder="留空 = 按房源字段自动生成；也可以自己写，或点「出三版」挑一个开头再改"></textarea>
+          <small><em id="copy-model-hint"></em>一句话一行，出片时一句配一个镜头。字幕会自动切成单行短句，跟着语速一段段换。</small>
         </div>
       </div>
       <div class="notice">提交后会生成可编辑的口播草稿。真实配音与成片由视频工作台完成。</div>

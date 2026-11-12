@@ -734,9 +734,9 @@ async function loadSettings() {
   api("/api/copy/status")
     .then((copy) => {
       const hint = $("#copy-model-hint");
-      if (hint) hint.textContent = copy.ready ? `${copy.label} · ${copy.model}` : "未配置 AI，走规则版";
-      const button = $("#btn-ai-copy");
-      if (button) button.title = copy.ready ? "" : "去系统设置里选服务商并填 API Key";
+      if (hint) hint.textContent = copy.ready ? `${copy.label} · ${copy.model} · ` : "未配置 AI，走规则版 · ";
+      const button = $("#btn-task-versions");
+      if (button) button.title = copy.ready ? "" : "走规则套写；去系统设置里选服务商并填 API Key 就能用大模型润色";
     })
     .catch(() => {});
 }
@@ -821,6 +821,8 @@ function openAdvancedTask() {
   closeDialog("quick-dialog");
   fillPropertyOptions(state.propertyOptions);
   resetDurationField();
+  // 人群下拉要在弹窗打开时就有选项，不能等点了「出三版」才填
+  ensureAudienceOptions().catch(() => {});
   openDialog("task-dialog");
 }
 
@@ -1173,7 +1175,7 @@ $("#import-form").addEventListener("submit", async (event) => {
   finally { busy(form, false); }
 });
 
-// ---------------------------------------------------------------- AI 文案
+// ---------------------------------------------------------------- 口播文案
 
 function copyDurationValue() {
   const raw = Number(durationInput().value);
@@ -1183,44 +1185,28 @@ function copyDurationValue() {
   return 45;
 }
 
-async function generateCopy() {
-  const propertyId = $("#task-property").value;
-  if (!propertyId) {
-    toast("先选关联房源，AI 才知道写哪一套", true);
-    return;
-  }
-  const button = $("#btn-ai-copy");
-  const label = button.textContent;
-  button.disabled = true;
-  button.textContent = "生成中…";
-  try {
-    const result = await api("/api/copy/generate", {
-      method: "POST",
-      body: JSON.stringify({ property_id: propertyId, target_duration: copyDurationValue() }),
-    });
-    $("#task-script").value = result.script || "";
-    toast(result.message || "已生成文案");
-  } catch (error) {
-    toast(error.message, true);
-  } finally {
-    button.disabled = false;
-    button.textContent = label;
-  }
+function shotCountForDuration(seconds) {
+  // 一镜约 7.5 秒：45 秒 6 镜，90 秒 8 镜。少于 4 镜讲不清一套房，多于 8 镜口播会赶。
+  return Math.max(4, Math.min(8, Math.round(Number(seconds || 45) / 7.5)));
 }
 
 // 三版开头：同一套房源，参数反差 / 痛点召唤 / 稀缺时效各出一条，
 // 点哪版就把整篇口播换掉。人群决定「说给谁听」，换人群开头会跟着变。
+// 新建任务弹窗和任务详情共用一个接口，只是往不同的框里填。
 let copyLibraryReady = false;
 
 async function ensureAudienceOptions() {
-  if (copyLibraryReady) return;
-  const select = $("#detail-audience");
-  if (!select) return;
+  const selects = [$("#detail-audience"), $("#task-audience")].filter(Boolean);
+  if (copyLibraryReady || !selects.length) return;
   const data = await api("/api/copy/hooks");
-  select.innerHTML = (data.audiences || [])
+  const options = (data.audiences || [])
     .map((item) => `<option value="${escapeHtml(item.key)}">${escapeHtml(item.label)}</option>`)
     .join("");
-  select.title = (data.tiers || []).map((tier) => `${tier.label}：${tier.when || ""}`).join("\n");
+  const tip = (data.tiers || []).map((tier) => `${tier.label}：${tier.when || ""}`).join("\n");
+  selects.forEach((select) => {
+    select.innerHTML = options;
+    select.title = tip;
+  });
   copyLibraryReady = true;
 }
 
@@ -1231,6 +1217,28 @@ function versionTitlesHtml(titles) {
     return `<div class="version-titles"><em>${label}</em><div class="version-pills">${pills}</div></div>`;
   };
   return group("抖音标题", titles.douyin) + group("小红书标题", titles.xiaohongshu);
+}
+
+function renderCopyVersions(data, box, target, pickedNote, options = {}) {
+  if (!box) return;
+  const cards = (data.versions || []).map((version, index) => `
+    <button type="button" class="version-card" data-index="${index}" title="${escapeHtml(version.script)}">
+      <span class="version-tag">${escapeHtml(version.tier_label)}</span>
+      <strong>${escapeHtml(version.hook)}</strong>
+    </button>`).join("");
+  // 新建任务里地方小，标题留给任务详情页看，这里只给开头
+  box.innerHTML = cards + (options.titles === false ? "" : versionTitlesHtml(data.titles || {}));
+  box.classList.remove("hidden");
+  box.querySelectorAll(".version-card").forEach((node) => {
+    node.addEventListener("click", () => {
+      const version = data.versions[Number(node.dataset.index)];
+      if (!version || !target) return;
+      target.value = version.script;
+      box.querySelectorAll(".version-card").forEach((item) => item.classList.remove("active"));
+      node.classList.add("active");
+      toast(`已换成「${version.tier_label}」这版，${pickedNote}`);
+    });
+  });
 }
 
 async function loadCopyVersions() {
@@ -1253,7 +1261,7 @@ async function loadCopyVersions() {
         count: 3,
       }),
     });
-    renderCopyVersions(data);
+    renderCopyVersions(data, $("#detail-versions"), $("#detail-script"), "点保存草稿才生效");
     toast(`出了 ${data.versions.length} 版，点一条就用它`);
   } catch (error) {
     toast(error.message, true);
@@ -1263,30 +1271,44 @@ async function loadCopyVersions() {
   }
 }
 
-function renderCopyVersions(data) {
-  const box = $("#detail-versions");
-  if (!box) return;
-  const cards = (data.versions || []).map((version, index) => `
-    <button type="button" class="version-card" data-index="${index}" title="${escapeHtml(version.script)}">
-      <span class="version-tag">${escapeHtml(version.tier_label)}</span>
-      <strong>${escapeHtml(version.hook)}</strong>
-    </button>`).join("");
-  box.innerHTML = cards + versionTitlesHtml(data.titles || {});
-  box.querySelectorAll(".version-card").forEach((node) => {
-    node.addEventListener("click", () => {
-      const version = data.versions[Number(node.dataset.index)];
-      if (!version) return;
-      $("#detail-script").value = version.script;
-      box.querySelectorAll(".version-card").forEach((item) => item.classList.remove("active"));
-      node.classList.add("active");
-      toast(`已换成「${version.tier_label}」这版，点保存草稿才生效`);
+// 新建任务时还没有任务记录，但房源已经选好了——出三版只需要房源，
+// 所以这里能直接给，不用先建草稿再进详情页。
+async function loadTaskVersions() {
+  const propertyId = $("#task-property")?.value;
+  if (!propertyId) {
+    toast("先选关联房源，才知道写哪一套", true);
+    return;
+  }
+  const button = $("#btn-task-versions");
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = "在想…";
+  try {
+    await ensureAudienceOptions();
+    const data = await api("/api/copy/versions", {
+      method: "POST",
+      body: JSON.stringify({
+        property_id: propertyId,
+        audience: $("#task-audience")?.value || "any",
+        count: 3,
+        // 镜头数跟目标时长走：一镜约 7.5 秒，45 秒给 6 个镜头
+        shot_count: shotCountForDuration(copyDurationValue()),
+      }),
     });
-  });
+    renderCopyVersions(data, $("#task-versions"), $("#task-script"), "不满意可以换人群再出一次", { titles: false });
+    toast(`出了 ${data.versions.length} 版，点一条填进文案框`);
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
+  }
 }
 
-async function polishCopy() {  const text = $("#task-script").value.trim();
+async function polishCopy() {
+  const text = $("#task-script").value.trim();
   if (text.length < 10) {
-    toast("先写几句，或点「AI 生成」拿到一版再润色", true);
+    toast("先写几句，或点「出三版」挑一个再润色", true);
     return;
   }
   const button = $("#btn-polish-copy");
@@ -1308,8 +1330,13 @@ async function polishCopy() {  const text = $("#task-script").value.trim();
   }
 }
 
-$("#btn-ai-copy")?.addEventListener("click", generateCopy);
+$("#btn-task-versions")?.addEventListener("click", loadTaskVersions);
 $("#btn-polish-copy")?.addEventListener("click", polishCopy);
+// 换房源后上一套的开头就作废了，留着会被误点
+$("#task-property")?.addEventListener("change", () => {
+  const box = $("#task-versions");
+  if (box) box.innerHTML = "";
+});
 $("#btn-copy-versions")?.addEventListener("click", loadCopyVersions);
 
 $("#task-form").addEventListener("submit", async (event) => {
