@@ -975,11 +975,17 @@ textarea { resize: vertical; line-height: 1.7; width: 100%; }
   border: 1px solid var(--line);
   overflow: hidden;
 }
+/* 视频铺满播放框、按原比例缩到框内（object-fit: contain）。
+   原来写的是 max-width/max-height:100%，但它是 Grid 子项，百分比高度
+   解析不出来，浏览器只按宽度缩 → 竖版 9:16 的高度撑破框子，被
+   overflow:hidden 切掉下半截，正好切在字幕上。别再改回百分比。 */
 .player-frame video {
-  max-width: 100%;
-  max-height: 100%;
-  border-radius: 10px;
-  box-shadow: 0 20px 60px -20px rgba(0, 0, 0, 0.9);
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 14px;
 }
 .player-frame .placeholder {
   padding: 30px;
@@ -1643,9 +1649,15 @@ kbd {
 /* ============================================================ 响应式 */
 
 @media (max-width: 1180px) {
-  .review-layout { grid-template-columns: 320px minmax(0, 1fr); }
-  .stage-body { grid-template-columns: 1fr; }
-  .stage-player { min-height: 300px; }
+  .review-layout { grid-template-columns: 320px minmax(0, 1fr); height: auto; min-height: 0; align-items: start; }
+  /* 两栏叠成一栏后，固定高度会把播放框压到只剩一条缝（视频被裁掉一大半）。
+     改成按内容走，整页由 main 滚动。 */
+  .queue-list { max-height: 52vh; }
+  .stage-body { grid-template-columns: 1fr; overflow: visible; gap: 14px; }
+  .stage-player { min-height: 0; }
+  .player-frame { flex: none; height: clamp(300px, 56vh, 620px); }
+  .stage-side { overflow: visible; }
+  .stage-actions { flex-wrap: wrap; }
 }
 
 @media (max-width: 900px) {
