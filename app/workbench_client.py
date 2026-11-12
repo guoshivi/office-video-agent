@@ -250,21 +250,45 @@ def _render_settings(task: dict, safe_mode: bool = False) -> dict:
         "voice": True,
         "speaker": speaker,
         "voice_engine": "qwen",
+        "vox_voice": "natural_female",
         "subtitles": True,
         "subtitle_size": 54,
-        "subtitle_bottom": 360,
+        # 380 是工作台界面自己的默认位置，之前写 360 会让字幕压得更低
+        "subtitle_bottom": 380,
         "subtitle_border": 3,
         "subtitle_style": "classic",
+        # 让模型自己挑句子里该高亮的词，比固定规则更接近人工出的效果
+        "highlight_source": "ai",
         "subtitle_highlight": True,
         "bgm": False,
-        "dedup": "light",
+        "bgm_path": "",
+        "bgm_volume": 0.2,
+        "voice_volume": 1.0,
+        # 工作台默认 off；开 light 会为了躲平台判重去动画面，画质反而掉
+        "dedup": "off",
         "speed": 1.0,
-        "shot_reuse": 2,
-        # 工作台原生支持这些，之前没显式传就吃它的默认值，
-        # 现在按「中介发圈」这个场景定死：留贴纸、不要花字刷屏、不加音效
-        "sticker_enabled": False if safe_mode else _flag(settings, "render_sticker", "0"),
-        "flower_enabled": False if safe_mode else _flag(settings, "render_flower", "0"),
-        "sfx_enabled": False if safe_mode else _flag(settings, "render_sfx", "0"),
+        # 1 = 一个镜头只用一次；2 会让同一段画面重复出现，成片显廉价
+        "shot_reuse": 1,
+        # 下面这几个是三件套的开关。默认跟工作台界面一致（全开），
+        # 失败时 render_task 会用 safe_mode 关掉重跑一次，不会让中介干等
+        "sticker_enabled": False if safe_mode else _flag(settings, "render_sticker", "1"),
+        "flower_enabled": False if safe_mode else _flag(settings, "render_flower", "1"),
+        "sfx_enabled": False if safe_mode else _flag(settings, "render_sfx", "1"),
+        "flower_style": "auto",
+        "flower_density": "high",
+        # 美颜和滤镜对房源实拍是减分项：墙面色偏了反而显得房子不对
+        "beauty": False,
+        "beauty_strength": 0.25,
+        "visual_filter": "original",
+        "visual_filter_strength": 0.35,
+        "pronunciations": [],
+        "subtitle_overrides": [],
+        "cover": None,
+        "intro": None,
+        "outro": None,
+        "logo_enabled": False,
+        "overlay_enabled": False,
+        "watermark_enabled": False,
         "sentence_gap_seconds": 0.10 <= gap <= 1.0 and gap or 0.22,
         "target_seconds": target_seconds,
         "width": width,
