@@ -22,6 +22,7 @@
         <button class="nav-item" data-view="review"><span class="nav-icon">◉</span>审核台<span id="nav-review-count" class="nav-count">0</span></button>
         <button class="nav-item" data-view="properties"><span class="nav-icon">▦</span>房源库<span id="nav-property-count" class="nav-count">0</span></button>
         <button class="nav-item" data-view="tasks"><span class="nav-icon">▷</span>视频任务</button>
+        <button class="nav-item" data-view="library"><span class="nav-icon">◎</span>视频库</button>
         <button class="nav-item" data-view="publish"><span class="nav-icon">↗</span>发布</button>
         <button class="nav-item" data-view="settings"><span class="nav-icon">⚙</span>设置</button>
       </nav>
@@ -189,6 +190,27 @@
             <div class="table-wrap"><table><thead><tr><th>任务编号</th><th>关联房源</th><th>视频</th><th>规格</th><th>状态</th><th>创建时间</th><th></th></tr></thead><tbody id="task-rows"></tbody></table></div>
             <div class="table-footer" id="task-total">共 0 条</div>
           </div>
+        </section>
+
+        <!-- ================================================= 视频库 -->
+        <section class="view" id="view-library">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">REFERENCE</p>
+              <h3>爆款拆解</h3>
+              <p class="section-note">上传一条别人的爆款，拆出镜头节奏和文案骨架，再套到自己的房源上。不联网也能拆，装得越多拆得越细。</p>
+            </div>
+            <div class="library-actions">
+              <input type="file" id="library-file" accept="video/*" hidden />
+              <button class="button" id="library-upload">上传参考视频</button>
+            </div>
+          </div>
+          <div class="library-url-row">
+            <input class="input" id="library-url" placeholder="或贴抖音/小红书链接，回车下载" />
+            <button class="button button-ghost" id="library-from-url">下载并拆解</button>
+          </div>
+          <div class="library-grid" id="library-grid"></div>
+          <div id="library-detail" hidden></div>
         </section>
 
         <!-- ================================================= 发布 -->

@@ -92,6 +92,97 @@ def _split_captions(rows: list[dict]) -> tuple[list[dict], list[dict]]:
     return labels, subtitles
 
 
+def _compact(text: str) -> str:
+    return re.sub(r"\s", "", text or "")
+
+
+def _pick_subtitle_band(
+    rows: list[dict], *, min_segments: int = 4, max_gap: float = 2.5, min_y: float = 0.55
+) -> list[dict]:
+    """从 OCR 结果里挑出真正是字幕的那一条带。
+
+    只看 y 坐标不行：实测一条 25 秒视频，画面下方 87 段「文字」里 85 段是包装上的字。
+    试过两个判据都不成立——按「重复度」挑会选中包装上反复出现的那行字，
+    按「文本多变」挑会选中背面特写里被 OCR 读花的说明字。
+
+    真正成立的是**时间连续性**：口播字幕是一条不断的流，每 1~2 秒换一句，
+    从片头铺到片尾，中间不会有长空白；包装、门头、易拉宝上的字只在某个镜头
+    出现一次，前后都是大段空白。所以按 y 分桶后，
+    只保留「段数够多、中间不断流、位置在下半屏」的一桶。
+    """
+    if not rows:
+        return []
+
+    buckets: dict[int, list[dict]] = {}
+    for row in rows:
+        text = _compact(row.get("text", ""))
+        if not text or float(row.get("y", 1.0)) < min_y:
+            continue
+        buckets.setdefault(round(float(row.get("y", 1.0)) / 0.04), []).append(row)
+
+    best: tuple[int, list[dict]] | None = None
+    for items in buckets.values():
+        items = sorted(items, key=lambda row: row["start"])
+        if len(items) < min_segments:
+            continue
+        gap = max(
+            (later["start"] - earlier["end"] for earlier, later in zip(items, items[1:])),
+            default=0.0,
+        )
+        if gap > max_gap:
+            continue
+        if len({_compact(row["text"]) for row in items}) < 3:
+            continue
+        if best is None or len(items) > best[0]:
+            best = (len(items), items)
+
+    return best[1] if best else []
+
+
+def _covers_enough(sentences: list[dict], duration: float) -> bool:
+    """字幕要贯穿全片才算拿到了台词，零星几行说明认错了东西。"""
+    if len(sentences) < 2:
+        return False
+    spoken = sum(row["end"] - row["start"] for row in sentences)
+    return spoken >= duration * 0.25
+
+
+def _similar(left: str, right: str) -> float:
+    from difflib import SequenceMatcher
+
+    a, b = _compact(left), _compact(right)
+    if not a or not b:
+        return 0.0
+    return SequenceMatcher(None, a, b).ratio()
+
+
+def _coalesce(rows: list[dict], gap: float = 1.0, likeness: float = 0.5) -> list[dict]:
+    """把同一条字幕的连续几帧并成一句。
+
+    OCR 是每秒抽 1.2 帧认的，一句字幕会连着出现两三帧，而且每帧读出来的字
+    略有出入（「怎么分辨」/「怎么分瓣」）。
+
+    只按时间间隙合并会翻车：抽帧间隔是 0.83 秒，同句和相邻句的间隔一样长，
+    一路并下去整条片子只剩两句。所以必须再加一道文本相似度——
+    同一句的不同读法相似度在 0.7 以上，换句之后会掉到 0.3 以下。
+    """
+    merged: list[dict] = []
+    for row in sorted(rows, key=lambda item: item["start"]):
+        if (
+            merged
+            and row["start"] - merged[-1]["end"] <= gap
+            and _similar(row["text"], merged[-1]["text"]) >= likeness
+        ):
+            last = merged[-1]
+            last["end"] = max(last["end"], row["end"])
+            # 同一句被读成好几个版本时，取字最多的那版——漏字比多字更常见
+            if len(_compact(row["text"])) > len(_compact(last["text"])):
+                last["text"] = row["text"]
+            continue
+        merged.append(dict(row))
+    return merged
+
+
 # ------------------------------------------------------------------ 结构
 
 def classify(text: str, index: int, total: int) -> str:
@@ -109,30 +200,88 @@ def classify(text: str, index: int, total: int) -> str:
     return "亮点"
 
 
+# 只有画面、没有台词时的骨架：开头抓人、中间讲房、最后收口。
+# 顺序和 copywriting._LINE_BANK 的话题名对齐，这样套模板时能直接落到句式库。
+_SKELETON = ("hook", "area", "zone", "furn", "boss", "value", "cta")
+
+
+def skeleton_roles(count: int) -> list[str]:
+    """镜头数 → 角色序列。第一镜钩子、最后一镜收尾，中间按看房顺序循环。"""
+    if count <= 0:
+        return []
+    if count == 1:
+        return ["hook"]
+    middle = [role for role in _SKELETON[1:-1]]
+    roles = ["hook"]
+    for index in range(count - 2):
+        roles.append(middle[index % len(middle)])
+    roles.append("cta")
+    return roles
+
+
+def _merge_close(bounds: list[float], min_seconds: float = 0.6) -> list[float]:
+    """切点太密会把一个摇镜拆成三段，合并成一段更接近人眼感知的镜头。"""
+    merged: list[float] = []
+    for value in bounds:
+        if not merged or value - merged[-1] >= min_seconds:
+            merged.append(value)
+    return merged
+
+
+def _shots_from_cuts(duration: float, cuts: list[float]) -> list[dict]:
+    """没有台词时，用画面切点当镜头边界。
+
+    这不是退而求其次的猜测：镜头数是这条片子最硬的节奏信息，
+    几秒一换镜、开场留多久，都能直接拿去指导拍摄。
+    """
+    edges = [0.0] + [c for c in _merge_close(cuts) if 0.2 < c < duration - 0.2] + [duration]
+    spans = [(a, b) for a, b in zip(edges, edges[1:]) if b - a > 0.3] or [(0.0, duration)]
+    roles = skeleton_roles(len(spans))
+    shots = []
+    for index, (start, end) in enumerate(spans):
+        shots.append({
+            "index": index + 1,
+            "role": roles[index],
+            "start": round(start, 2),
+            "end": round(end, 2),
+            "seconds": round(end - start, 1),
+            "sample": "",
+            "words": 0,
+        })
+    return shots
+
+
 def build_spec(
     duration: float,
     cuts: list[float],
     sentences: list[dict],
     labels: list[dict],
 ) -> dict:
-    """把节奏、口播、角标合成一份模板 spec。"""
-    if not sentences:
-        raise RefVideoError("没有识别到任何口播或字幕文案，无法建立模板")
+    """把节奏、口播、角标合成一份模板 spec。
 
-    shots = []
-    total = len(sentences)
-    for index, row in enumerate(sentences):
-        text = row["text"].strip()
-        seconds = round(max(row["end"] - row["start"], 0.4), 1)
-        shots.append({
-            "index": index + 1,
-            "role": classify(text, index, total),
-            "start": row["start"],
-            "end": row["end"],
-            "seconds": seconds,
-            "sample": text,
-            "words": len(text),
-        })
+    台词不是必需品：没读到台词时只产出「镜头数与节奏」，角色按看房骨架补。
+    这样即使本机没装语音模型，拆解仍然能给出可用结论。
+    """
+    if not duration:
+        raise RefVideoError("视频时长为 0，文件可能损坏")
+
+    if sentences:
+        shots = []
+        total = len(sentences)
+        for index, row in enumerate(sentences):
+            text = row["text"].strip()
+            seconds = round(max(row["end"] - row["start"], 0.4), 1)
+            shots.append({
+                "index": index + 1,
+                "role": classify(text, index, total),
+                "start": row["start"],
+                "end": row["end"],
+                "seconds": seconds,
+                "sample": text,
+                "words": len(text),
+            })
+    else:
+        shots = _shots_from_cuts(duration, cuts)
 
     # 每个镜头的画面里出现了哪些角标——套用时要按同样的位置放角标
     for shot in shots:
@@ -164,26 +313,39 @@ def build_spec(
         "words_per_second": round(words / duration, 2) if duration else 0,
     }
 
-    tips = [f"全长 {duration:.0f} 秒，共 {len(shots)} 句，平均一句 {avg_shot} 秒"]
+    last = shots[-1]
+    has_text = any(shot["words"] for shot in shots)
+
+    tips: list[str] = []
+    if has_text:
+        tips.append(f"全长 {duration:.0f} 秒，共 {len(shots)} 句，平均一句 {avg_shot} 秒")
+    else:
+        tips.append(f"全长 {duration:.0f} 秒，共 {len(shots)} 个镜头，平均 {avg_shot} 秒一换")
     if cut_span:
         tips.append(f"画面切点 {len(cut_span)} 个，平均每 {duration / (len(cut_span) + 1):.1f} 秒换一次镜")
-    tips.append(f"语速约 {words / duration:.1f} 字/秒，最长的一句 {longest['seconds']} 秒（第 {longest['index']} 句）")
+    if has_text:
+        tips.append(f"语速约 {words / duration:.1f} 字/秒，最长的一句 {longest['seconds']} 秒（第 {longest['index']} 句）")
+    else:
+        tips.append("没读到台词：只拆了画面节奏，套模板时文案由本地句式库按这套镜头数生成")
     if labels:
         tips.append(f"画面上方有功能区角标 {len(labels)} 处，是这套模板的识别度来源")
     if len(shots) <= 2 and cut_span:
         # 纯卡点片：没有口播，卖点全靠音乐切换和字幕点题
         tips.append(f"这是卡点片：{len(cut_span) + 1} 个镜头跟着音乐切，台词极少，靠画面节奏和字幕点题")
-    last = shots[-1]
-    if last["role"] == "cta":
+    if has_text and last["role"] == "cta":
         tips.append(f"收尾第 {last['index']} 句是明确的行动号召：" + last["sample"])
+
+    if not has_text:
+        summary = f"{len(shots)} 个镜头、{duration:.0f} 秒，平均 {avg_shot} 秒一换，台词没读到"
+    elif len(shots) <= 2 and cut_span:
+        summary = f"卡点片：{len(cut_span) + 1} 个镜头、{duration:.0f} 秒，台词只有 {len(shots)} 句"
+    else:
+        summary = f"{len(shots)} 句口播、{len(cut_span)} 个切点，{duration:.0f} 秒讲完一套房源"
 
     return {
         "engine": "local",
-        "summary": (
-            f"卡点片：{len(cut_span) + 1} 个镜头、{duration:.0f} 秒，台词只有 {len(shots)} 句"
-            if len(shots) <= 2 and cut_span
-            else f"{len(shots)} 句口播、{len(cut_span)} 个切点，{duration:.0f} 秒讲完一套房源"
-        ),
+        "text_source": "asr" if has_text else "none",
+        "summary": summary,
         "tone": "口语、短句、第二人称带看口吻" if _HOOK.search(shots[0]["sample"]) else "口语直述",
         "structure": structure,
         "pacing": pacing,
@@ -254,21 +416,34 @@ def _fuse(subtitles: list[dict], sentences: list[dict]) -> list[dict]:
 
 
 def analyze_file(path: Path) -> dict:
-    """完整拆一条片子：时长 → 切点 → 转写 → 字幕 → 合成。"""
+    """完整拆一条片子：时长 → 切点 → 转写 → 字幕 → 合成。
+
+    台词是加分项，不是前置条件：听不到就只交节奏，并把原因写进 warnings，
+    界面上能直接告诉使用者「还差什么」，而不是弹一个看不懂的报错。
+    """
     path = Path(_windows_path(path))
     if not path.is_file():
         raise RefVideoError(f"参考视频不存在：{path}")
 
     caps = probe_capabilities()
-    if not caps["speech_ready"]:
-        raise RefVideoError("本地语音模型未就绪，先运行 tools/fetch_asr_model.py")
+    warnings: list[str] = []
 
     try:
         duration = probe_duration(path)
         cuts = scene_cuts(path)
-        sentences = transcribe(path)
-    except (ShotError, AsrError) as error:
+    except ShotError as error:
         raise RefVideoError(str(error)) from error
+
+    sentences: list[dict] = []
+    text_source = "none"
+    if caps["speech_ready"]:
+        try:
+            sentences = transcribe(path)
+            text_source = "asr"
+        except AsrError as error:
+            warnings.append(f"口播转写失败：{error}｜这次只拆画面节奏")
+    else:
+        warnings.append("本机没装语音模型，这次只拆画面节奏；想要逐句台词，见设置里的语音模型说明")
 
     labels: list[dict] = []
     if caps["caption_ocr_ready"]:
@@ -276,18 +451,25 @@ def analyze_file(path: Path) -> dict:
             frames = _grab_frames(path, fps=1.2)
             rows = read_captions(frames)
             labels, subtitles = _split_captions(rows)
+            subtitles = _coalesce(_pick_subtitle_band(subtitles))
+            if not _covers_enough(subtitles, duration):
+                subtitles = []
             if sentences:
                 # 口播与字幕都有：时间用转写，文字用字幕
                 sentences = _fuse(subtitles, sentences)
             elif subtitles:
                 # 纯字幕片（只有 BGM）：底部字幕就是台词
                 sentences = subtitles
-        except Exception:  # noqa: BLE001 - OCR 是增益，失败不该毁掉整条分析
+                text_source = "caption"
+        except Exception as error:  # noqa: BLE001 - OCR 是增益，失败不该毁掉整条分析
             labels = []
+            warnings.append(f"字幕识别失败：{str(error)[:120]}")
 
     spec = build_spec(duration, cuts, sentences, labels)
     spec["duration"] = round(duration, 1)
     spec["cuts"] = cuts
+    spec["text_source"] = text_source
+    spec["warnings"] = warnings
     return spec
 
 

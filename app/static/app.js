@@ -42,6 +42,7 @@ const VIEW_META = {
   review: ["REVIEW DESK", "审核台"],
   properties: ["LISTING DATABASE", "房源库"],
   tasks: ["VIDEO PIPELINE", "视频任务"],
+  library: ["REFERENCE", "视频库"],
   publish: ["DISTRIBUTION", "发布"],
   settings: ["LOCAL CONFIGURATION", "设置"],
 };
@@ -161,6 +162,7 @@ function showView(name) {
   $("main").scrollTop = 0;
 
   if (name === "tasks") loadTasks();
+  if (name === "library") loadLibrary();
   if (name === "properties") loadProperties();
   if (name === "dashboard") loadDashboard();
   if (name === "review") loadReview(true);
@@ -1920,6 +1922,263 @@ $("#quick-advanced").addEventListener("click", () => openAdvancedTask());
 $("#quick-form").addEventListener("submit", (event) => {
   event.preventDefault();
   submitQuick();
+});
+
+/* ==========================================================================
+   视频库：拆解参考爆款
+   --------------------------------------------------------------------------
+   这一页的重点不是"识别视频"，是把一条片子压成能照着拍的结构：
+   几个镜头、每镜几秒、每镜拍什么、每镜担什么角色。
+   前三样本地算，第四样要人看一眼——点「看拆解」就是干这个。
+   ========================================================================== */
+
+const library = { items: [], current: null, tasks: [] };
+
+const TEXT_SOURCE_LABEL = {
+  none: "只有画面节奏",
+  caption: "读到画面字幕",
+  asr: "听到口播",
+  review: "已复核",
+};
+
+const ROLE_LABEL = {
+  hook: "开头", area: "面积", zone: "空间", furn: "家具",
+  boss: "老板间", value: "价格", cta: "收尾", 亮点: "卖点", 面积: "面积",
+};
+
+async function loadLibrary() {
+  const grid = $("#library-grid");
+  grid.innerHTML = `<div class="library-empty">正在读取视频库…</div>`;
+  try {
+    const [data, tasks] = await Promise.all([
+      api("/api/templates?limit=50"),
+      api("/api/tasks?limit=40").catch(() => ({ items: [] })),
+    ]);
+    library.items = data.items || [];
+    library.tasks = tasks.items || [];
+    renderLibrary();
+  } catch (error) {
+    grid.innerHTML = `<div class="library-empty">读不到视频库：${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function renderLibrary() {
+  const grid = $("#library-grid");
+  if (!library.items.length) {
+    grid.innerHTML = `<div class="library-empty">还没有参考视频。上传一条你觉得拍得好的爆款，我来拆它的结构。</div>`;
+    return;
+  }
+  grid.innerHTML = library.items.map(templateCard).join("");
+}
+
+function templateCard(item) {
+  const spec = item.spec || {};
+  const source = TEXT_SOURCE_LABEL[spec.text_source || "none"] || "待拆解";
+  const thumb = item.status === "ready" && item.shot_count
+    ? `<img src="/api/templates/${item.id}/grid.jpg?t=${Date.now()}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{textContent:'拼图待生成'}))">`
+    : `<span>${item.status === "failed" ? "拆解失败" : "待拆解"}</span>`;
+  return `
+    <article class="template-card" data-template="${escapeHtml(item.id)}">
+      <div class="template-thumb">${thumb}</div>
+      <div class="template-body">
+        <h4>${escapeHtml(item.name || "未命名")}</h4>
+        <p class="template-meta">${item.duration_s ? `${Math.round(item.duration_s)} 秒` : "时长未知"} · ${item.shot_count || 0} 句 · ${escapeHtml(source)}</p>
+        <p class="template-summary">${escapeHtml(item.summary || "还没拆出结构")}</p>
+        ${item.error ? `<p class="template-error">${escapeHtml(item.error)}</p>` : ""}
+        <div class="template-actions">
+          <button class="button button-ghost" data-act="open">看拆解</button>
+          <button class="button button-ghost" data-act="repack">重新拆</button>
+          <button class="button button-ghost" data-act="delete">删除</button>
+        </div>
+      </div>
+    </article>`;
+}
+
+async function openTemplate(templateId) {
+  const box = $("#library-detail");
+  box.hidden = false;
+  box.innerHTML = `<div class="panel"><p>正在拆解…第一次拆会慢一点（要抽帧读字幕）。</p></div>`;
+
+  try {
+    // ready 的模板直接读结果；pending/failed 的顺手触发一次本地拆解
+    let detail = await api(`/api/templates/${templateId}`);
+    if (detail.status !== "ready") {
+      await api(`/api/templates/${templateId}/analyze`, { method: "POST" });
+      detail = await waitTemplateReady(templateId);
+    }
+    const pack = await api(`/api/templates/${templateId}/pack`, { method: "POST" }).catch(() => null);
+    renderTemplateDetail(detail, pack);
+  } catch (error) {
+    box.innerHTML = `<div class="panel"><p class="template-error">拆解失败：${escapeHtml(error.message)}</p></div>`;
+  }
+}
+
+async function waitTemplateReady(templateId, tries = 40) {
+  for (let index = 0; index < tries; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const detail = await api(`/api/templates/${templateId}`);
+    if (detail.status === "ready") return detail;
+    if (detail.status === "failed") throw new Error(detail.error || "拆解失败");
+  }
+  throw new Error("拆解超时，视频可能太长或文件损坏");
+}
+
+function renderTemplateDetail(detail, pack) {
+  const spec = detail.spec || {};
+  const shots = spec.shots || [];
+  const structure = spec.structure || [];
+  const warnings = spec.warnings || [];
+
+  const bars = structure.map((item) => `
+    <div class="structure-row">
+      <span class="structure-role">${escapeHtml(ROLE_LABEL[item.role] || item.role)}</span>
+      <span class="structure-bar"><i style="width:${Math.round((item.share || 0) * 100)}%"></i></span>
+      <span class="structure-value">${item.seconds}s · ${Math.round((item.share || 0) * 100)}%</span>
+    </div>`).join("");
+
+  const rows = shots.map((shot) => `
+    <tr>
+      <td>${shot.index}</td>
+      <td>${shot.scene || "-"}</td>
+      <td>${escapeHtml(ROLE_LABEL[shot.role] || shot.role || "-")}</td>
+      <td>${shot.seconds}s</td>
+      <td>${escapeHtml(shot.subject || "")}</td>
+      <td>${escapeHtml(shot.sample || "")}</td>
+    </tr>`).join("");
+
+  const options = library.tasks.map((task) =>
+    `<option value="${escapeHtml(task.id)}">${escapeHtml(task.task_no)} · ${escapeHtml(task.property_label || "")}</option>`
+  ).join("");
+
+  $("#library-detail").innerHTML = `
+    <div class="panel template-detail">
+      <div class="template-detail-head">
+        <div>
+          <p class="eyebrow">${escapeHtml(TEXT_SOURCE_LABEL[spec.text_source || "none"] || "")}</p>
+          <h3>${escapeHtml(detail.name || "参考视频")}</h3>
+          <p class="section-note">${escapeHtml(spec.summary || "")}</p>
+        </div>
+        <div class="template-apply">
+          <select class="input" id="template-task">
+            <option value="">选一条任务套用</option>
+            ${options}
+          </select>
+          <button class="button button-primary" data-apply="${escapeHtml(detail.id)}">套用到任务</button>
+        </div>
+      </div>
+
+      ${pack ? `<div class="template-grid-wrap"><img src="/api/templates/${detail.id}/grid.jpg?t=${Date.now()}" alt="镜头拼图"></div>` : ""}
+
+      <div class="template-columns">
+        <div>
+          <h4>结构占比</h4>
+          ${bars || `<p class="section-note">还没读出结构</p>`}
+        </div>
+        <div>
+          <h4>能照搬什么</h4>
+          <ul class="template-tips">${(spec.tips || []).map((tip) => `<li>${escapeHtml(tip)}</li>`).join("")}</ul>
+        </div>
+      </div>
+
+      ${warnings.length ? `<div class="template-warnings">${warnings.map((text) => `<p>${escapeHtml(text)}</p>`).join("")}</div>` : ""}
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>句</th><th>镜</th><th>角色</th><th>时长</th><th>拍的是什么</th><th>台词</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+async function uploadReference(file) {
+  if (!file) return;
+  const body = new FormData();
+  body.append("video", file);
+  body.append("name", file.name.replace(/\.[^.]+$/, ""));
+  toast("正在上传参考视频…");
+  try {
+    const created = await api("/api/templates", { method: "POST", body });
+    await loadLibrary();
+    await openTemplate(created.id);
+  } catch (error) {
+    toast(`上传失败：${error.message}`, true);
+  }
+}
+
+async function downloadReference() {
+  const url = $("#library-url").value.trim();
+  if (!url) {
+    toast("先贴一个视频链接", true);
+    return;
+  }
+  toast("正在下载…抖音有时要登录态，失败了就手动下载后上传");
+  try {
+    const created = await api("/api/templates/from-url", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    });
+    $("#library-url").value = "";
+    await loadLibrary();
+    await openTemplate(created.id);
+  } catch (error) {
+    toast(`下载失败：${error.message}`, true);
+  }
+}
+
+$("#library-upload").addEventListener("click", () => $("#library-file").click());
+
+$("#library-file").addEventListener("change", (event) => {
+  uploadReference(event.target.files?.[0]);
+  event.target.value = "";
+});
+
+$("#library-from-url").addEventListener("click", downloadReference);
+
+$("#library-url").addEventListener("keydown", (event) => {
+  if (event.key === "Enter") downloadReference();
+});
+
+$("#library-grid").addEventListener("click", async (event) => {
+  const card = event.target.closest("[data-template]");
+  if (!card) return;
+  const templateId = card.dataset.template;
+  const action = event.target.closest("[data-act]")?.dataset.act;
+  if (action === "delete") {
+    if (!confirm("删掉这条参考视频和它的拆解结果？")) return;
+    await api(`/api/templates/${templateId}`, { method: "DELETE" }).catch((error) => toast(error.message, true));
+    $("#library-detail").hidden = true;
+    loadLibrary();
+    return;
+  }
+  if (action === "repack") {
+    await api(`/api/templates/${templateId}/analyze`, { method: "POST" }).catch((error) => toast(error.message, true));
+  }
+  openTemplate(templateId);
+});
+
+$("#library-detail").addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-apply]");
+  if (!button) return;
+  const taskId = $("#template-task").value;
+  if (!taskId) {
+    toast("先在上面选一条任务", true);
+    return;
+  }
+  button.disabled = true;
+  try {
+    const result = await api(`/api/tasks/${taskId}/apply-template`, {
+      method: "POST",
+      body: JSON.stringify({ template_id: button.dataset.apply }),
+    });
+    const engine = result.engine === "cloud" ? "云端模型" : "本地句式库";
+    toast(`已生成 ${result.storyboard?.length || ""} 句分镜（${engine}），去视频任务里改文案`);
+    loadTasks();
+  } catch (error) {
+    toast(`套用失败：${error.message}`, true);
+  } finally {
+    button.disabled = false;
+  }
 });
 
 Promise.all([loadDashboard(), loadProperties(), loadTasks(), loadSettings()])

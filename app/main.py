@@ -1124,6 +1124,63 @@ def create_template_from_url(payload: dict):
     return {"id": template_id, "status": "pending"}
 
 
+@app.post("/api/templates/{template_id}/pack")
+def template_pack(template_id: str, force: bool = False):
+    """生成读图包：镜头拼图 + 待填清单，交给 WorkBuddy 复核。
+
+    本地能算的（切点、时长、OCR 台词）在这之前已经算完；这一步只是把结果
+    摊成一张能看的图，不含任何模型调用，所以不需要 key 也能跑。
+    """
+    from .reviewpack import ReviewPackError, build_pack
+
+    try:
+        return build_pack(template_id, force=force)
+    except ReviewPackError as error:
+        raise HTTPException(400, str(error)) from error
+
+
+@app.get("/api/templates/{template_id}/grid.jpg")
+def template_grid(template_id: str):
+    from .style_template import TEMPLATE_DIR
+
+    path = TEMPLATE_DIR / template_id / "grid.jpg"
+    if not path.is_file():
+        raise HTTPException(404, "还没有生成镜头拼图，先点一次拆解")
+    return FileResponse(path, media_type="image/jpeg")
+
+
+@app.put("/api/templates/{template_id}/review")
+def template_review(template_id: str, payload: dict):
+    """回填复核结果。scenes 按镜头给语义，shots 按句子纠台词。"""
+    from .reviewpack import ReviewPackError, apply_review
+
+    body = payload or {}
+    try:
+        return apply_review(
+            template_id,
+            scenes=body.get("scenes") or [],
+            shots=body.get("shots") or [],
+            summary=str(body.get("summary") or ""),
+        )
+    except ReviewPackError as error:
+        raise HTTPException(400, str(error)) from error
+
+
+@app.post("/api/templates/{template_id}/analyze", status_code=202)
+def template_analyze(template_id: str):
+    """重新拆解一条模板（本地拆解，不需要云端 key）。"""
+    from .refvideo import analyze_template
+
+    def run() -> None:
+        try:
+            analyze_template(template_id)
+        except Exception:  # noqa: BLE001 - 失败已写回库
+            pass
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"id": template_id, "status": "analyzing"}
+
+
 @app.delete("/api/templates/{template_id}")
 def delete_template(template_id: str):
     from .style_template import TEMPLATE_DIR

@@ -27,6 +27,7 @@ VIEWS = [
     ("publish", "发布", ".platform-card"),
     ("properties", "房源库", "#property-rows tr"),
     ("tasks", "视频任务", "#task-rows tr"),
+    ("library", "视频库", ".template-card"),
     ("settings", "设置", "#settings-form"),
 ]
 

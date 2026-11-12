@@ -1,0 +1,30 @@
+# 00 拆解的可选依赖：不装也能拆，只是拆不到台词。
+#
+# 主 requirements.txt 里刻意没有这几项。它们是「读视频」才用得到的，
+# 加起来 100MB 左右（还没算语音模型 1.5GB），装进主清单会让整包变重，
+# 而 00 拆解一周也用不了几次，不该拖累每天都要跑的 01~04。
+#
+# 装法（**必须带 --no-deps**，原因见下）：
+#   .venv\Scripts\python.exe -m pip install --no-deps -r requirements-analyze.txt
+#
+# 为什么 --no-deps：
+#   rapidocr-onnxruntime 声明的依赖里有 opencv-python，而本项目出片用的是
+#   opencv-python-headless（不需要窗口组件）。不带 --no-deps 装，
+#   pip 会把 opencv-python 5.x 装进来顶掉 headless，出片链路的 cv2 行为就变了。
+#   本文件里已经手动把 rapidocr 真正需要的那几个依赖列全，可以安全跳过依赖解析。
+
+# 读画面里烧录的字幕（RapidOCR，含中文识别模型）
+rapidocr-onnxruntime>=1.2,<2
+onnxruntime>=1.17,<2
+pyclipper>=1.3,<2
+shapely>=2.0,<3
+six>=1.16,<2
+
+# 听口播转写（faster-whisper）。只有装了这个才需要再下模型：
+#   .venv\Scripts\python.exe tools\fetch_asr_model.py
+# 约 1.5GB，装完 probe_capabilities() 的 speech_ready 才会变 True。
+# 不装不影响拆解，只是把「逐句台词」换成「只拆画面节奏」。
+faster-whisper>=1.1,<2
+
+# 贴抖音/小红书链接直接下片。抖音接口常变，失败时也应该能手动下载后上传。
+yt-dlp>=2025.1

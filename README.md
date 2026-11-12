@@ -226,6 +226,7 @@ docs/review.md       审核台：预检规则、状态机、多维表格桥接
 docs/publish.md      发布链路、平台差异、已验证项与踩过的坑
 docs/runbook.md      运维手册：启动、日常流程、故障排查、模块边界
 docs/copy-hooks.md   文案钩子：三档话术、成本句折算、双平台标题
+docs/video-library.md 00 拆解：三档能力、OCR 三个坑、镜头语义怎么回填
 docs/字段填写规范.md 房源表怎么填：租金七种写法、面积必须写数字、自检命令
 ```
 

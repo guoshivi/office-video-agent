@@ -254,14 +254,18 @@ def _run_safely(template_id: str) -> None:
 
 # ------------------------------------------------------------------ 套用
 
-def _facts_for(task_row) -> str:
+def _property_for(task_row) -> dict:
     with transaction() as connection:
         row = connection.execute(
             "SELECT * FROM properties WHERE id=?", (task_row["property_id"],)
         ).fetchone()
     if row is None:
         raise StyleTemplateError("任务绑定的房源已不存在")
-    public = public_property(row)
+    return public_property(row)
+
+
+def _facts_for(task_row) -> str:
+    public = _property_for(task_row)
     fields = [
         ("区域", public["region"]),
         ("楼栋", public["building"]),
@@ -274,6 +278,86 @@ def _facts_for(task_row) -> str:
     ]
     lines = [f"{label}：{value}" for label, value in fields if value]
     return "\n".join(lines) or "（这套房源没有可用字段）"
+
+
+# 卖点镜轮着讲什么。一条片子连着四个"亮点"镜时，不能四句都说采光。
+_SPOT_ROTATION = ("zone", "furn", "boss", "light")
+_ROLE_TO_TOPIC = {
+    "hook": "hook",
+    "area": "area", "面积": "area",
+    "value": "value", "价格": "value",
+    "cta": "cta",
+    "亮点": None, "spot": None, "": None,
+}
+
+
+def _compact_spec(spec: dict) -> dict:
+    """把模板压成「一镜一句」。
+
+    这一步很关键：原始拆解是**逐句**的，一条 25 秒的爆款能拆出 17 句台词。
+    照着 17 句写，开头会连着三句钩子、四个卖点镜各说一句，念出来又臭又长。
+
+    模板真正值钱的是镜头结构——几个镜头、每镜担什么角色、什么顺序。
+    所以套用时按镜头压成一句，镜头数才是文案句数。
+    """
+    scenes = spec.get("scenes") or []
+    if not scenes:
+        # 没复核过的模板没有镜头语义，退回按原 shots 的 role 去重
+        compact, seen = [], set()
+        for shot in spec.get("shots") or []:
+            role = str(shot.get("role") or "")
+            key = role or f"_{len(compact)}"
+            if key in seen:
+                continue
+            seen.add(key)
+            compact.append({"index": len(compact) + 1, "role": role, "sample": ""})
+        return {**spec, "shots": compact}
+
+    cursor = 0
+    shots = []
+    for item in scenes:
+        role = str(item.get("role") or "")
+        topic = _ROLE_TO_TOPIC.get(role, "light")
+        if topic is None:
+            topic = _SPOT_ROTATION[cursor % len(_SPOT_ROTATION)]
+            cursor += 1
+        shots.append({
+            "index": len(shots) + 1,
+            "role": topic,
+            "sample": "",
+            "subject": item.get("subject", ""),
+        })
+    return {**spec, "shots": shots}
+
+
+def _local_board(spec: dict, public: dict) -> list[dict]:
+    """没有云端模型时，用本地句式库按模板结构套写。
+
+    这条路不需要任何 API Key，也不联网：模板提供的是「几镜、每镜讲什么」，
+    内容全部来自房源字段和已经验证过的句式库，不会编出面积和价格。
+    """
+    from .copywriting import CopywritingError, fallback_storyboard
+
+    compact = _compact_spec(spec)
+    try:
+        board = fallback_storyboard(compact, public)
+    except CopywritingError as error:
+        raise StyleTemplateError(str(error)) from error
+
+    roles = {shot["index"]: str(shot.get("role") or "") for shot in compact.get("shots") or []}
+    clean: list[dict] = []
+    for position, shot in enumerate(board, start=1):
+        text = str(shot.get("text") or "").strip()
+        if not text:
+            continue
+        clean.append({
+            "index": position,
+            "label": roles.get(position, "")[:40],
+            "text": text,
+        })
+    if not clean:
+        raise StyleTemplateError("这套房源的信息不够，本地引擎写不出文案；补上面积和租金再试")
+    return clean
 
 
 def apply_to_task(task_id: str, template_id: str) -> dict:
@@ -290,32 +374,38 @@ def apply_to_task(task_id: str, template_id: str) -> dict:
     if task is None:
         raise StyleTemplateError("任务不存在")
 
-    spec = json.loads(template["spec_json"] or "{}")
+    # 套用前先压成「一镜一句」：原模板是逐句拆的，一条 25 秒的片子能出十几句，
+    # 照那个句数写会变成连着三句钩子、四个卖点镜各说一句
+    spec = _compact_spec(json.loads(template["spec_json"] or "{}"))
     shots = spec.get("shots") or []
     if not shots:
         raise StyleTemplateError("模板里没有可用的分镜结构")
 
-    limit = min(int((spec.get("constraints") or {}).get("max_words_per_shot") or MAX_SHOT_TEXT), MAX_SHOT_TEXT)
-    prompt = APPLY_PROMPT.format(
-        spec=json.dumps(spec, ensure_ascii=False),
-        facts=_facts_for(task),
-        count=len(shots),
-        limit=limit,
-    )
-    config = style_config()
-    result = _chat([{"role": "user", "content": prompt}], config["text_model"])
+    engine = "local"
+    if style_config()["api_key"]:
+        engine = "cloud"
+        limit = min(int((spec.get("constraints") or {}).get("max_words_per_shot") or MAX_SHOT_TEXT), MAX_SHOT_TEXT)
+        prompt = APPLY_PROMPT.format(
+            spec=json.dumps(spec, ensure_ascii=False),
+            facts=_facts_for(task),
+            count=len(shots),
+            limit=limit,
+        )
+        config = style_config()
+        result = _chat([{"role": "user", "content": prompt}], config["text_model"])
 
-    generated = result.get("shots") or []
-    board = []
-    for position, item in enumerate(generated[: len(shots)], start=1):
-        text = str(item.get("text") or "").strip()
-        if not text:
-            continue
-        role = str(item.get("role") or shots[position - 1].get("role") or "").strip()
-        board.append({"index": position, "label": role[:40], "text": text})
-
-    if not board:
-        raise StyleTemplateError("模型没有生成可用文案")
+        generated = result.get("shots") or []
+        board = []
+        for position, item in enumerate(generated[: len(shots)], start=1):
+            text = str(item.get("text") or "").strip()
+            if not text:
+                continue
+            role = str(item.get("role") or shots[position - 1].get("role") or "").strip()
+            board.append({"index": position, "label": role[:40], "text": text})
+        if not board:
+            raise StyleTemplateError("模型没有生成可用文案")
+    else:
+        board = _local_board(spec, _property_for(task))
 
     # 套模板前必须先有分镜 manifest（save_storyboard 会往里写）。
     # 任务若还没跑过 analyze，这里替用户跑一次，省得点了没反应。
@@ -330,9 +420,11 @@ def apply_to_task(task_id: str, template_id: str) -> dict:
             raise StyleTemplateError(f"分镜分析失败：{error}") from error
 
     try:
-        return save_storyboard(task_id, board)
+        result = save_storyboard(task_id, board)
     except ShotError as error:
         raise StyleTemplateError(str(error)) from error
+    result["engine"] = engine
+    return result
 
 
 # ------------------------------------------------------------------ 链接下载
