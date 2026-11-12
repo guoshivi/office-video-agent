@@ -389,14 +389,23 @@ def _require_property(property_id: str):
     return row
 
 
-def _copy_facts(row) -> dict:
-    """交给模型的事实清单。租金一律不传，避免它自己报价。"""
+def _copy_facts(row, *, with_rent: bool = False) -> dict:
+    """交给模型的事实清单。
+
+    默认不传租金，避免模型自己报价。钩子和成本句要算「一天多少钱」，
+    这时候传 with_rent=True——传的是原文，折算由脚本做，模型只许引用。
+    """
     raw = {
         "区域": row["region_norm"], "楼栋": row["building_norm"], "房号": row["room_norm"],
         "面积": row["area_raw"], "格局": row["partition_raw"],
         "朝向": row["orientation_raw"], "家具装修": row["furnishing_layout_raw"],
     }
-    return {key: str(value).strip() for key, value in raw.items() if (value or "").strip()}
+    out = {key: str(value).strip() for key, value in raw.items() if (value or "").strip()}
+    if with_rent:
+        rent = str(row["rent_raw"] or "").strip() if "rent_raw" in row.keys() else ""
+        if rent:
+            out["租金"] = rent
+    return out
 
 
 @app.get("/api/copy/status")
@@ -404,6 +413,71 @@ def copy_status():
     from .llm import status as llm_status
 
     return llm_status()
+
+
+class CopyVersionsRequest(BaseModel):
+    property_id: str = Field(default="")
+    audience: str = Field(default="any", max_length=20)
+    count: int = Field(default=3, ge=1, le=5)
+    shot_count: int = Field(default=6, ge=3, le=10)
+    use_api: bool = False
+
+
+@app.get("/api/copy/hooks")
+def copy_hooks():
+    """钩子库概览 + 可选人群，前端下单前先知道自己有什么弹药。"""
+    from . import hooks as hook_library
+
+    return {
+        "library": hook_library.describe(),
+        "audiences": hook_library.audiences(),
+        "tiers": [
+            {"key": t.get("key"), "label": t.get("label"), "what": t.get("what"), "when": t.get("when")}
+            for t in hook_library.tiers()
+        ],
+    }
+
+
+@app.post("/api/copy/versions")
+def copy_versions(payload: CopyVersionsRequest):
+    """同一套房源出 N 版开头：三档话术各一条，配完整分镜和双平台标题。
+
+    默认走规则（快、不花钱），要 AI 润色就用 /api/copy/polish 打磨选中的那版。
+    """
+    from . import hooks as hook_library
+    from .copywriting import build_titles, generate_storyboard, join_script
+
+    row = _require_property(payload.property_id)
+    facts = _copy_facts(row, with_rent=True)
+
+    versions: list[dict] = []
+    for item in hook_library.pick(facts, payload.audience, payload.count):
+        board, origin = generate_storyboard(
+            {},
+            facts,
+            prefer_api=payload.use_api,
+            audience=payload.audience,
+            hook=item["text"],
+            shot_count=payload.shot_count,
+        )
+        versions.append({
+            "tier": item["tier"],
+            "tier_label": item["tier_label"],
+            "hook": item["text"],
+            "storyboard": board,
+            "script": join_script(board),
+            "origin": origin,
+        })
+
+    if not versions:
+        raise HTTPException(400, "这套房源的信息还不够写钩子，先把面积和租金补上")
+
+    return {
+        "versions": versions,
+        "titles": build_titles(facts, payload.audience),
+        "audience": payload.audience,
+        "library": hook_library.describe(),
+    }
 
 
 @app.post("/api/copy/generate")

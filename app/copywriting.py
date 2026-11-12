@@ -18,6 +18,7 @@ import json
 import logging
 import re
 
+from . import hooks as hook_library
 from . import style_template
 
 logger = logging.getLogger(__name__)
@@ -30,16 +31,26 @@ class CopywritingError(RuntimeError):
 # ------------------------------------------------------------------ 房源事实
 
 def _norm_facts(facts: dict) -> dict[str, str]:
+    """房源字段统一成中文 key。中英文都认——接口层给的是中文（区域/面积/租金），
+    老调用方给的是英文（region/area/rent），两边都不能丢字段。"""
     keys = {
         "region": "区域", "building": "楼栋", "room": "房号", "area": "面积",
         "partition": "格局", "orientation": "朝向", "furnishing_layout": "家具",
         "rent": "租金", "title": "名称", "notes": "备注",
     }
+    # 同一个字段在别处可能叫另一个中文名，一起认
+    aliases = {"家具": ["家具", "家具装修"]}
     out: dict[str, str] = {}
     for key, label in keys.items():
-        value = str(facts.get(key) or "").strip()
-        if value:
-            out[label] = value
+        value = facts.get(key)
+        if not value:
+            for name in aliases.get(label, [label]):
+                value = facts.get(name)
+                if value:
+                    break
+        text = str(value or "").strip()
+        if text:
+            out[label] = text
     return out
 
 
@@ -59,6 +70,8 @@ _LINE_BANK: dict[str, list[str]] = {
     "area": [
         "{area}平，{partition}的办公室", "面积{area}平，{partition}格局",
         "{area}平{partition}，大小刚刚好",
+        # 钩子里已经报过面积时改说格局，不然开头和这句像复读
+        "格局方正，没有斜角", "方方正正，家具怎么摆都合适",
     ],
     "light": [
         "采光通透，全景落地窗", "整整一面落地窗，白天不用开灯",
@@ -77,8 +90,9 @@ _LINE_BANK: dict[str, list[str]] = {
         "入户就是工区，动线特别顺", "能摆下整套工位，还富余",
     ],
     "value": [
-        "租金{labeled}，性价比直接拉满", "这个价格拿下这一层，真不多见",
-        "即入驻即办公，空置期一天不浪费",
+        "一个月{monthly}，摊到每天{daily}元", "{seats}个工位，人均一个月{per_person}元",
+        "这个价格拿下这一层，真不多见", "即入驻即办公，空置期一天不浪费",
+        "算下来比换个地方重新装修划算多了",
     ],
     "cta": [
         "感兴趣的老板，赶紧过来看看吧", "心动的老板私信我，约时间实地看",
@@ -97,6 +111,10 @@ _KEYWORD_ROUTING: list[tuple[str, str]] = [
 
 
 def _topic_for(sample: str, role: str) -> str:
+    # 没模板时我们自己造的 role 就是话题名，直接命中
+    role_key = str(role or "").strip().lower()
+    if role_key in _LINE_BANK:
+        return role_key
     text = f"{sample} {role}"
     for keyword, topic in _KEYWORD_ROUTING:
         if keyword in text:
@@ -104,15 +122,25 @@ def _topic_for(sample: str, role: str) -> str:
     return "light"
 
 
-def _fill(pattern: str, facts: dict[str, str]) -> str:
-    area = _area_number(facts)
+def _fill(pattern: str, facts: dict[str, str]) -> str | None:
+    """套房源变量。缺字段就返回 None，宁可少一句也不出半截话。"""
+    ctx = hook_library.context(facts)
     rent = facts.get("租金", "")
-    labeled = f"{rent}" if rent else "合适的价格"
-    return pattern.format(area=area, partition=facts.get("格局", "精装"), labeled=labeled)
+    ctx.setdefault("labeled", rent or "合适的价格")
+    try:
+        return pattern.format(**ctx)
+    except (KeyError, IndexError):
+        return None
 
 
-def fallback_storyboard(spec: dict, facts: dict) -> list[dict]:
-    """规则套写：按模板每句的话题路由句式库，套房源字段。"""
+def fallback_storyboard(
+    spec: dict, facts: dict, *, audience: str = "any", hook: str = ""
+) -> list[dict]:
+    """规则套写：按模板每句的话题路由句式库，套房源字段。
+
+    audience 只影响第一句——开头是给谁看的，后面几句讲的都是房子本身。
+    hook 传了就用它当第一句（前端三版里选中的那条）。
+    """
     normalized = _norm_facts(facts)
     shots = spec.get("shots") or []
     if not shots:
@@ -123,8 +151,14 @@ def fallback_storyboard(spec: dict, facts: dict) -> list[dict]:
     # 每个话题库记一个游标轮转取句，尽量少回头
     cursors: dict[str, int] = {}
 
-    def pick(topic: str) -> str:
+    def pick(topic: str, *, avoid: tuple[str, ...] = ()) -> str:
         bank = _LINE_BANK[topic]
+        # 开头已经报过的数字不许再报一次，换说法的句子顶上
+        for name in avoid:
+            token = "{" + name + "}"
+            lean = [p for p in bank if token not in p]
+            if lean:
+                bank = lean
         start = cursors.get(topic, 0)
         for offset in range(len(bank)):
             pattern = bank[(start + offset) % len(bank)]
@@ -132,7 +166,7 @@ def fallback_storyboard(spec: dict, facts: dict) -> list[dict]:
             if "租金" in pattern and not normalized.get("租金"):
                 continue
             line = _fill(pattern, normalized)
-            if line not in used:
+            if line and line not in used:
                 cursors[topic] = (start + offset + 1) % len(bank)
                 used.add(line)
                 return line
@@ -142,30 +176,61 @@ def fallback_storyboard(spec: dict, facts: dict) -> list[dict]:
                 continue
             for pattern in other_bank:
                 line = _fill(pattern, normalized)
-                if line not in used:
+                if line and line not in used:
                     used.add(line)
                     return line
-        return _fill(bank[0], normalized)
+        return _fill(bank[0], normalized) or ""
+
+    # 开头优先用钩子库（三档话术），没有库才退回老句式
+    opening = str(hook or "").strip()
+    if not opening:
+        picked = hook_library.pick(normalized, audience, count=1)
+        opening = picked[0]["text"] if picked else ""
+    area_number = _area_number(normalized)
+    area_used = bool(area_number and area_number in opening)
+    opening_ctx = hook_library.context(normalized)
+    daily_used = bool(opening_ctx.get("daily") and opening_ctx["daily"] in opening)
+    monthly_used = bool(opening_ctx.get("monthly") and opening_ctx["monthly"] in opening)
 
     for position, shot in enumerate(shots):
         role = str(shot.get("role") or "")
         sample = str(shot.get("sample") or "")
-        if position == 0 or "hook" in role.lower():
-            text = pick("hook")
+        if position == 0:
+            text = opening or pick("hook")
         elif "面积" in role or "area" in role.lower():
-            text = pick("area")
+            text = pick("area", avoid=("area",) if area_used else ())
         elif "cta" in role.lower() or position == len(shots) - 1:
             text = pick("cta")
+        elif _topic_for(sample, role) == "value":
+            skip = tuple(name for name, used in (("daily", daily_used), ("monthly", monthly_used)) if used)
+            text = pick("value", avoid=skip)
         else:
             text = pick(_topic_for(sample, role))
         if not text:
             continue
+        # 开头已经用过的不许再出现第二次
+        if position == 0:
+            used.add(text)
         entry = {"index": len(board) + 1, "text": text}
         label = shot.get("labels") or []
         if label:
             entry["label"] = {"title": str(label[0])[:6]}
         board.append(entry)
     return board
+
+
+# 没有参考模板时的默认分镜：钩子 → 面积 → 公区 → 家具 → 价格 → 行动
+DEFAULT_ROLES = ("hook", "area", "zone", "furn", "value", "cta")
+
+
+def default_spec(shot_count: int = 6) -> dict:
+    """没拆过参考视频也能出片：用一个行业通行的六镜骨架。"""
+    roles = list(DEFAULT_ROLES)[:max(3, min(shot_count, len(DEFAULT_ROLES)))]
+    return {
+        "shots": [{"index": i + 1, "role": role, "sample": ""} for i, role in enumerate(roles)],
+        "constraints": {"max_words_per_shot": 18},
+        "source": "default",
+    }
 
 
 # ------------------------------------------------------------------ 大模型
@@ -178,13 +243,26 @@ COPY_PROMPT = """你在给一条办公室租赁短视频写逐句口播文案。
 这套房源的可用信息（只能用这些，不许编造面积、租金、朝向、配套）：
 {facts}
 
+开头三选一（本地钩子库按这条房源算出来的，第一句必须用其中一版，允许改语气，不许换意思）：
+{hooks}
+
+这条片子拍给「{audience}」看，用他们自己的说法，别用中介内部术语。
+
 要求：
 1. 输出 {count} 句，一镜一句，角色顺序跟模板 shots 一致。
 2. 每句不超过 {limit} 字；中文口播每秒约 4 字，宁可短不要长。
 3. 相邻两句不许意思重复；数字钩子（面积、租金）最多出现一次，别句句报数。
-4. 最后一句必须是行动号召。
+4. 至少有一句要把月租折成「一天多少钱」或「一个人多少钱」，老板听这个才有感觉。
+5. 最后一句必须是行动号召。
 
 只输出 JSON：{{"shots": [{{"index": 1, "role": "hook", "text": "第一句"}}]}}"""
+
+
+def _audience_label(key: str) -> str:
+    for item in hook_library.audiences():
+        if item.get("key") == key:
+            return str(item.get("label") or key)
+    return "不限人群"
 
 
 def _dedupe(board: list[dict]) -> list[dict]:
@@ -204,16 +282,24 @@ def _dedupe(board: list[dict]) -> list[dict]:
     return out
 
 
-def llm_storyboard(spec: dict, facts: dict) -> list[dict]:
+def llm_storyboard(spec: dict, facts: dict, *, audience: str = "any", hook: str = "") -> list[dict]:
     """调火山方舟按模板写文案。没配 key 时抛错，由调用方决定兜底。"""
     if not style_template.is_configured():
         raise CopywritingError("未配置 ARK_API_KEY")
     normalized = _norm_facts(facts)
     shots = spec.get("shots") or []
     limit = int((spec.get("constraints") or {}).get("max_words_per_shot") or 20)
+
+    if hook:
+        picked = [hook]
+    else:
+        picked = [item["text"] for item in hook_library.pick(normalized, audience, count=3)]
+
     prompt = COPY_PROMPT.format(
         spec=json.dumps(spec, ensure_ascii=False),
         facts="\n".join(f"{k}：{v}" for k, v in normalized.items()) or "（无）",
+        hooks="\n".join(f"- {text}" for text in picked) or "（房源信息太少，自己按面积写一句）",
+        audience=_audience_label(audience),
         count=len(shots),
         limit=limit,
     )
@@ -235,11 +321,87 @@ def llm_storyboard(spec: dict, facts: dict) -> list[dict]:
     return board
 
 
-def generate_storyboard(spec: dict, facts: dict, *, prefer_api: bool = True) -> tuple[list[dict], str]:
-    """统一入口。返回 (storyboard, 来源)；来源为 "api" 或 "rules"。"""
+def generate_storyboard(
+    spec: dict,
+    facts: dict,
+    *,
+    prefer_api: bool = True,
+    audience: str = "any",
+    hook: str = "",
+    shot_count: int = 6,
+) -> tuple[list[dict], str]:
+    """统一入口。返回 (storyboard, 来源)；来源为 "api" 或 "rules"。
+
+    没给模板（或模板里没有分镜）时用六镜默认骨架，让没拆过参考视频的
+    房源也能直接出片——以前这种情况是直接抛错的。
+    """
+    if not (spec or {}).get("shots"):
+        spec = default_spec(shot_count)
     if prefer_api:
         try:
-            return llm_storyboard(spec, facts), "api"
+            return llm_storyboard(spec, facts, audience=audience, hook=hook), "api"
         except Exception as error:  # noqa: BLE001 - API 失败安静地退规则
             logger.warning("API 文案失败，退回规则套写：%s", str(error)[:200])
-    return fallback_storyboard(spec, facts), "rules"
+    return fallback_storyboard(spec, facts, audience=audience, hook=hook), "rules"
+
+
+# ------------------------------------------------------------------ 发布标题
+
+def build_titles(facts: dict, audience: str = "any") -> dict[str, list[str]]:
+    """同一套房源，两个平台两套标题。
+
+    抖音靠前两秒决定划不划走，标题要把面积和价格顶到最前面；
+    小红书是搜索场，标题得能被「XX 区 办公室 出租」这种词搜到。
+    """
+    ctx = hook_library.context(facts)
+
+    def fmt(tpl: str) -> str | None:
+        needed = re.findall(r"\{(\w+)\}", tpl)
+        if any(not ctx.get(name) for name in needed):
+            return None
+        return tpl.format(**ctx)
+
+    douyin = [
+        fmt("{region}{area}平办公室，{monthly}一个月"),
+        fmt("{area}平{partition}，一天{daily}元，老板来算笔账"),
+        fmt("在{region}找{area}平的看过来，{monthly}能拿下"),
+        fmt("{area}平带全套家具，月租{monthly}"),
+        fmt("{region}办公室出租，{area}平，{monthly}"),
+        # 租金缺失或算不出来时的兜底：标题不能空着
+        fmt("{region}{area}平办公室，{partition}"),
+        fmt("{area}平，这个格局搬进来就能开工"),
+    ]
+    xhs = [
+        fmt("{region}看房｜{area}平精装{partition}"),
+        fmt("{area}平｜家具全带，拎包就开工"),
+        fmt("找办公室｜{region}{area}平，一天{daily}元"),
+        fmt("月租{monthly}｜{area}平，够{seats}个工位"),
+        fmt("找办公室先看这间｜{region}{area}平"),
+        fmt("{region}办公室｜{area}平，格局很正"),
+    ]
+
+    return {
+        # 抖音标题超过 30 字会被折，小红书超过 20 字会被截
+        "douyin": _tidy(douyin, 30),
+        "xiaohongshu": _tidy(xhs, 20),
+        "audience": _audience_label(audience),
+    }
+
+
+def _tidy(rows: list[str | None], limit: int) -> list[str]:
+    out: list[str] = []
+    for text in rows:
+        text = (text or "").strip()
+        if not text or len(text) > limit or text in out:
+            continue
+        out.append(text)
+    return out[:3]
+
+
+def join_script(board: list[dict]) -> str:
+    """分镜拼成一篇口播稿：每句一个句号，念的时候才有停顿。"""
+    parts = [
+        str(entry.get("text") or "").strip().rstrip("。！？，、")
+        for entry in board
+    ]
+    return "。".join(part for part in parts if part) + "。"

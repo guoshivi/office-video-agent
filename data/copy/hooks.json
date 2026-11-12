@@ -1,0 +1,248 @@
+{
+  "version": 1,
+  "updated": "2026-11-12",
+  "source": "行业结构初版：按抖音办公租赁爆款的三种开头套路归类，待用真实对标账号替换",
+  "note": "tpl 里的 {xxx} 是房源变量，缺字段的模板会被自动跳过，不会出现空格子。scarcity 档属于话术，不承载事实，发之前要人工确认房源确实稀缺。",
+  "audiences": [
+    {
+      "key": "any",
+      "label": "不限人群",
+      "hint": "什么人都能看，安全牌"
+    },
+    {
+      "key": "startup",
+      "label": "创业团队",
+      "hint": "3 到 6 人，刚从共享办公搬出来"
+    },
+    {
+      "key": "small",
+      "label": "小团队",
+      "hint": "8 到 20 人，嫌现有场地小"
+    },
+    {
+      "key": "boss",
+      "label": "外地老板 / 办事处",
+      "hint": "要体面、要能会客、人不多"
+    },
+    {
+      "key": "trade",
+      "label": "贸易 / 电商",
+      "hint": "要堆货、要大空间、要货车好停"
+    }
+  ],
+  "tiers": [
+    {
+      "key": "contrast",
+      "label": "参数反差",
+      "what": "用面积和租金的反差，打破「这么大一定很贵」的预判",
+      "when": "房源有明确面积和租金时最好用，转化最直接",
+      "hooks": [
+        {
+          "tpl": "{area}平的办公室，一天只要{daily}元",
+          "need": [
+            "area",
+            "daily"
+          ],
+          "aud": [
+            "any"
+          ]
+        },
+        {
+          "tpl": "在{region}，{area}平精装办公，月租{monthly}",
+          "need": [
+            "region",
+            "area",
+            "monthly"
+          ],
+          "aud": [
+            "any"
+          ]
+        },
+        {
+          "tpl": "以为{area}平很贵？月租{monthly}，先进来看看",
+          "need": [
+            "area",
+            "monthly"
+          ],
+          "aud": [
+            "any"
+          ]
+        },
+        {
+          "tpl": "{area}平，{partition}，{monthly}一个月",
+          "need": [
+            "area",
+            "partition",
+            "monthly"
+          ],
+          "aud": [
+            "any"
+          ]
+        },
+        {
+          "tpl": "能摆{seats}个工位，一个月{monthly}",
+          "need": [
+            "seats",
+            "monthly"
+          ],
+          "aud": [
+            "small"
+          ]
+        },
+        {
+          "tpl": "{area}平的空间，一天{daily}元，比共享办公还便宜",
+          "need": [
+            "area",
+            "daily"
+          ],
+          "aud": [
+            "startup"
+          ]
+        },
+        {
+          "tpl": "{area}平这个面积，在{region}不好碰",
+          "need": [
+            "area",
+            "region"
+          ],
+          "aud": [
+            "any"
+          ]
+        },
+        {
+          "tpl": "整个团队搬进来，{area}平还有富余",
+          "need": [
+            "area"
+          ],
+          "aud": [
+            "any"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "pain",
+      "label": "痛点召唤",
+      "what": "先把老板正在难受的事说出来，再给这套房当解药",
+      "when": "房源参数不亮眼、但格局或家具好的时候用",
+      "hooks": [
+        {
+          "tpl": "团队扩到{seats}个人，还在挤共享办公？",
+          "need": [
+            "seats"
+          ],
+          "aud": [
+            "startup"
+          ]
+        },
+        {
+          "tpl": "每月花{monthly}租工位，不如自己租一间",
+          "need": [
+            "monthly"
+          ],
+          "aud": [
+            "startup"
+          ]
+        },
+        {
+          "tpl": "客户来了没地方坐？这间带独立老板间",
+          "need": [],
+          "aud": [
+            "boss"
+          ]
+        },
+        {
+          "tpl": "搬家最怕耽误生意，这套拎包就能进",
+          "need": [
+            "furnishing"
+          ],
+          "aud": [
+            "any"
+          ]
+        },
+        {
+          "tpl": "房租付了，装修还得再掏一笔？",
+          "need": [],
+          "aud": [
+            "any"
+          ]
+        },
+        {
+          "tpl": "每天通勤两小时，不如把办公室搬近点",
+          "need": [
+            "region"
+          ],
+          "aud": [
+            "any"
+          ]
+        },
+        {
+          "tpl": "{area}平看着大，工位摆不满就是白付钱",
+          "need": [
+            "area"
+          ],
+          "aud": [
+            "small"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "scarce",
+      "label": "稀缺时效",
+      "what": "制造「再不看我就要没了」的紧迫感，逼出私信",
+      "when": "同价位竞品多、需要抢客户时用；必须真稀缺才用，编多了掉信任",
+      "hooks": [
+        {
+          "tpl": "{region}这个价位，带窗的{area}平就这一套",
+          "need": [
+            "region",
+            "area"
+          ],
+          "aud": [
+            "any"
+          ]
+        },
+        {
+          "tpl": "刚空出来的{area}平，{partition}，先到先看",
+          "need": [
+            "area",
+            "partition"
+          ],
+          "aud": [
+            "any"
+          ]
+        },
+        {
+          "tpl": "同楼层只剩这一间，{area}平精装",
+          "need": [
+            "area"
+          ],
+          "aud": [
+            "any"
+          ]
+        },
+        {
+          "tpl": "这套先拍给大家看，{area}平一天{daily}元",
+          "need": [
+            "area",
+            "daily"
+          ],
+          "aud": [
+            "any"
+          ]
+        },
+        {
+          "tpl": "{region}{area}平，问的人已经排上了",
+          "need": [
+            "region",
+            "area"
+          ],
+          "aud": [
+            "any"
+          ]
+        }
+      ]
+    }
+  ]
+}

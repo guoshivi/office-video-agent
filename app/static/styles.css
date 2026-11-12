@@ -1391,7 +1391,8 @@ dialog[open] { animation: dialogIn 0.32s var(--ease-out); }
 }
 
 .detail-script-field {
-  flex: 1;
+  /* 不再吃满整栏：下面还要放「换个开头」和三版卡片，吃满就会把卡片顶出弹窗 */
+  flex: 0 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -1400,9 +1401,117 @@ dialog[open] { animation: dialogIn 0.32s var(--ease-out); }
   color: var(--text-2);
 }
 .detail-script-field textarea {
-  flex: 1;
-  min-height: 140px;
+  height: 124px;
+  min-height: 96px;
   resize: none;
+}
+
+/* 三版开头：一行控制条 + 可点的卡片，高度可控，不跟文案框抢地方 */
+.version-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.version-bar-title {
+  font-size: 12px;
+  color: var(--text-3);
+}
+.version-audience {
+  height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.version-bar .button {
+  margin-left: auto;
+}
+.version-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 0 1 auto;
+  max-height: 300px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.version-list:empty {
+  display: none;
+}
+.version-card {
+  display: grid;
+  gap: 2px;
+  padding: 7px 11px;
+  text-align: left;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.version-card:hover {
+  background: var(--surface-2);
+  border-color: var(--line-strong);
+}
+.version-card.active {
+  background: var(--amber-soft);
+  border-color: var(--amber);
+}
+.version-tag {
+  font-size: 11px;
+  color: var(--text-3);
+}
+.version-card.active .version-tag {
+  color: var(--amber);
+}
+.version-card strong {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+.version-card small {
+  display: block;
+  overflow: hidden;
+  max-height: 2.15em;
+  font-size: 12px;
+  display: none;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+.version-titles {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  margin-top: 4px;
+}
+.version-titles em {
+  flex: 0 0 62px;
+  font-style: normal;
+  font-size: 11px;
+  white-space: nowrap;
+  line-height: 19px;
+  color: var(--text-3);
+}
+.version-pills {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+.version-pills span {
+  padding: 1px 7px;
+  font-size: 11.5px;
+  line-height: 17px;
+  white-space: nowrap;
+  color: var(--text-2);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
 }
 
 /* 原声：一行下拉，不跟文案抢高度 */

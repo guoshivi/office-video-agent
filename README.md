@@ -224,6 +224,8 @@ docs/quickstart.md   给不懂电脑的人看的一页纸：双击、看灯、�
 docs/review.md       审核台：预检规则、状态机、多维表格桥接
 docs/publish.md      发布链路、平台差异、已验证项与踩过的坑
 docs/runbook.md      运维手册：启动、日常流程、故障排查、模块边界
+docs/copy-hooks.md   文案钩子：三档话术、成本句折算、双平台标题
+docs/copy-hooks.md   文案钩子：三档话术、成本句折算、双平台标题
 ```
 
 ## 迁移到另一台电脑

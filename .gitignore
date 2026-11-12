@@ -9,6 +9,9 @@ data/*
 # 否则新机器 clone 下来出片会因为找不到字体直接失败
 !data/render-env/
 !data/render-env/**
+# 钩子库同理：话术是程序资产，缺了它新机器出片就退回老句式
+!data/copy/
+!data/copy/**
 *.db
 *.sqlite3
 logs/

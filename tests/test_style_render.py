@@ -36,7 +36,10 @@ def test_fallback_no_duplicates():
 
 def test_fallback_rent_line_when_rent_given():
     board = fallback_storyboard(SPEC, FACTS)
-    assert any("88" in entry["text"] for entry in board)
+    texts = [entry["text"] for entry in board]
+    # 口播念折算后的月租，不念「88元/平/月」这种只有同行听得懂的单价
+    assert any("1.9万" in text or "691" in text for text in texts), texts
+    assert not any("88元/平" in text for text in texts), texts
 
 
 def test_fallback_no_rent_placeholder():

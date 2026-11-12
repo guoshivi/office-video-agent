@@ -1036,6 +1036,10 @@ function applyTaskDetail(task, initial = true) {
     // 任务没单独选过就显示设置里的默认值，避免下拉空白
     $("#detail-audio-mode").value = task.audio_mode || state.settings.local_audio_mode || "mix";
     $("#detail-warnings").innerHTML = task.warnings.map((warning) => `<div class="warning-item">${escapeHtml(warning)}</div>`).join("");
+    // 换一个任务，上一套三版就不该还挂在这儿
+    const versions = $("#detail-versions");
+    if (versions) versions.innerHTML = "";
+    ensureAudienceOptions().catch(() => {});
     $("#export-result").classList.add("hidden");
     $("#export-task").textContent = task.workbench_package_path ? "重新导出任务包" : "导出任务包";
   }
@@ -1204,8 +1208,83 @@ async function generateCopy() {
   }
 }
 
-async function polishCopy() {
-  const text = $("#task-script").value.trim();
+// 三版开头：同一套房源，参数反差 / 痛点召唤 / 稀缺时效各出一条，
+// 点哪版就把整篇口播换掉。人群决定「说给谁听」，换人群开头会跟着变。
+let copyLibraryReady = false;
+
+async function ensureAudienceOptions() {
+  if (copyLibraryReady) return;
+  const select = $("#detail-audience");
+  if (!select) return;
+  const data = await api("/api/copy/hooks");
+  select.innerHTML = (data.audiences || [])
+    .map((item) => `<option value="${escapeHtml(item.key)}">${escapeHtml(item.label)}</option>`)
+    .join("");
+  select.title = (data.tiers || []).map((tier) => `${tier.label}：${tier.when || ""}`).join("\n");
+  copyLibraryReady = true;
+}
+
+function versionTitlesHtml(titles) {
+  const group = (label, list) => {
+    if (!list || !list.length) return "";
+    const pills = list.map((text) => `<span>${escapeHtml(text)}</span>`).join("");
+    return `<div class="version-titles"><em>${label}</em><div class="version-pills">${pills}</div></div>`;
+  };
+  return group("抖音标题", titles.douyin) + group("小红书标题", titles.xiaohongshu);
+}
+
+async function loadCopyVersions() {
+  const task = state.currentTask;
+  if (!task || !task.property_id) {
+    toast("这条任务没关联房源，钩子写不出来", true);
+    return;
+  }
+  const button = $("#btn-copy-versions");
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = "在想…";
+  try {
+    await ensureAudienceOptions();
+    const data = await api("/api/copy/versions", {
+      method: "POST",
+      body: JSON.stringify({
+        property_id: task.property_id,
+        audience: $("#detail-audience")?.value || "any",
+        count: 3,
+      }),
+    });
+    renderCopyVersions(data);
+    toast(`出了 ${data.versions.length} 版，点一条就用它`);
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
+  }
+}
+
+function renderCopyVersions(data) {
+  const box = $("#detail-versions");
+  if (!box) return;
+  const cards = (data.versions || []).map((version, index) => `
+    <button type="button" class="version-card" data-index="${index}" title="${escapeHtml(version.script)}">
+      <span class="version-tag">${escapeHtml(version.tier_label)}</span>
+      <strong>${escapeHtml(version.hook)}</strong>
+    </button>`).join("");
+  box.innerHTML = cards + versionTitlesHtml(data.titles || {});
+  box.querySelectorAll(".version-card").forEach((node) => {
+    node.addEventListener("click", () => {
+      const version = data.versions[Number(node.dataset.index)];
+      if (!version) return;
+      $("#detail-script").value = version.script;
+      box.querySelectorAll(".version-card").forEach((item) => item.classList.remove("active"));
+      node.classList.add("active");
+      toast(`已换成「${version.tier_label}」这版，点保存草稿才生效`);
+    });
+  });
+}
+
+async function polishCopy() {  const text = $("#task-script").value.trim();
   if (text.length < 10) {
     toast("先写几句，或点「AI 生成」拿到一版再润色", true);
     return;
@@ -1231,6 +1310,7 @@ async function polishCopy() {
 
 $("#btn-ai-copy")?.addEventListener("click", generateCopy);
 $("#btn-polish-copy")?.addEventListener("click", polishCopy);
+$("#btn-copy-versions")?.addEventListener("click", loadCopyVersions);
 
 $("#task-form").addEventListener("submit", async (event) => {
   event.preventDefault();

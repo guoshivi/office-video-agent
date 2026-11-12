@@ -570,6 +570,12 @@
         </div>
         <div class="detail-side">
           <label class="detail-script-field"><span>口播草稿</span><textarea id="detail-script" rows="12"></textarea></label>
+          <div class="version-bar">
+            <span class="version-bar-title">换个开头</span>
+            <select id="detail-audience" class="version-audience"></select>
+            <button type="button" class="button button-sm button-ghost" id="btn-copy-versions">出三版</button>
+          </div>
+          <div id="detail-versions" class="version-list"></div>
           <label class="detail-audio-field"><span>原声</span><select id="detail-audio-mode">
             <option value="mix">保留原声（压低垫在口播下）</option>
             <option value="voice">不要原声（只有口播 + 音乐）</option>
