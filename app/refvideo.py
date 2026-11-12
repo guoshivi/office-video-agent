@@ -1,0 +1,317 @@
+"""本地拆解参考视频：不联网、不调云端模型，把一条片子读成可复用的模板。
+
+拆解要同时看四件事：
+
+1. **节奏** —— ffmpeg 的场景变化找出切点，算出平均镜头长度；
+2. **口播** —— faster-whisper 在本地转写，拿到逐句文案与时间；
+3. **字幕** —— 剪映导出的片子字幕烧在画面里，用 OCR 按帧读，
+   顺带把「顶部功能区角标」和「底部口播字幕」分开（位置差得很远，很好分）；
+4. **结构** —— 按句子角色（钩子 / 面积 / 亮点 / 收尾）归类，算出每段占多少时长。
+
+产出的 spec 和云端拆解保持同一套字段，上层套用时不用区分来源。
+"""
+
+from __future__ import annotations
+
+import re
+import subprocess
+import tempfile
+from pathlib import Path
+
+from .asr import AsrError, _windows_path, probe_capabilities, read_captions, transcribe
+from .db import json_dumps, transaction, utc_now
+from .shots import ShotError, _find_binary, probe_duration
+
+# 一句话的舒适区间：太短是碎片，太长一屏放不下
+MAX_WORDS = 22
+_CHINESE = 4.5  # 中文口播大约每秒 4~5 个字
+
+_CTA = re.compile(r"感兴趣|欢迎|过来看|私信|联系|留言|评论区|点赞|关注|咨询|带看")
+_AREA = re.compile(r"\d+\s*(?:平|㎡|平方米)")
+_ZONE = re.compile(r"老板|工位|工区|会议室|前台|接待|入户|茶水|阳台|仓|店|铺|隔间|间")
+_HOOK = re.compile(r"今天|带大家|推荐|看看|找到|带你|一套")
+
+
+class RefVideoError(RuntimeError):
+    pass
+
+
+# ------------------------------------------------------------------ 画面
+
+def scene_cuts(path: Path, threshold: float = 0.28) -> list[float]:
+    """返回切点时间（秒）。阈值沿用了项目里人工验证过的经验值。"""
+    ffmpeg = _find_binary("ffmpeg")
+    completed = subprocess.run(
+        [
+            ffmpeg, "-hide_banner", "-nostats", "-i", _windows_path(path),
+            "-filter:v", f"select='gt(scene,{threshold})',showinfo",
+            "-an", "-f", "null", "-",
+        ],
+        capture_output=True,
+        check=False,
+    )
+    text = completed.stderr.decode("utf-8", "ignore")
+    times = [float(m) for m in re.findall(r"pts_time:([0-9.]+)", text)]
+    # 相邻两个切点几乎重合时只留一个（同一帧被判定两次）
+    deduped: list[float] = []
+    for value in times:
+        if not deduped or value - deduped[-1] > 0.25:
+            deduped.append(value)
+    return deduped
+
+
+def _grab_frames(path: Path, fps: float = 1.0) -> list[tuple[float, str]]:
+    """按固定帧率抽帧，写进临时目录，返回 [(时间, 路径)]。"""
+    ffmpeg = _find_binary("ffmpeg")
+    folder = Path(tempfile.mkdtemp(prefix="ova-ref-frames-"))
+    completed = subprocess.run(
+        [
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-i", _windows_path(path),
+            "-vf", f"fps={fps}", "-q:v", "3", str(folder / "%05d.jpg"),
+        ],
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        message = completed.stderr.decode("utf-8", "ignore").strip()[:300]
+        raise RefVideoError(f"抽帧失败：{message or '未知错误'}")
+    frames = []
+    for index, file in enumerate(sorted(folder.glob("*.jpg")), start=0):
+        frames.append((index / fps, str(file)))
+    return frames
+
+
+def _split_captions(rows: list[dict]) -> tuple[list[dict], list[dict]]:
+    """把 OCR 结果分成「顶部角标」和「底部字幕」。
+
+    中介视频的版式很固定：功能区名字在画面上方（约占 20~30% 高度），
+    口播字幕压在下方（约占 70%）。按 y 坐标一刀切开就够，不需要版面模型。
+    """
+    labels = [r for r in rows if r.get("y", 1.0) < 0.45]
+    subtitles = [r for r in rows if r.get("y", 1.0) >= 0.45]
+    return labels, subtitles
+
+
+# ------------------------------------------------------------------ 结构
+
+def classify(text: str, index: int, total: int) -> str:
+    """给一句话定角色：钩子 / 面积 / 亮点 / 收尾。"""
+    if _CTA.search(text):
+        return "cta"
+    if index == 0 and (_HOOK.search(text) or _AREA.search(text)):
+        return "hook"
+    if _AREA.search(text):
+        return "面积"
+    if index == total - 1:
+        return "cta"
+    if _ZONE.search(text):
+        return "亮点"
+    return "亮点"
+
+
+def build_spec(
+    duration: float,
+    cuts: list[float],
+    sentences: list[dict],
+    labels: list[dict],
+) -> dict:
+    """把节奏、口播、角标合成一份模板 spec。"""
+    if not sentences:
+        raise RefVideoError("没有识别到任何口播或字幕文案，无法建立模板")
+
+    shots = []
+    total = len(sentences)
+    for index, row in enumerate(sentences):
+        text = row["text"].strip()
+        seconds = round(max(row["end"] - row["start"], 0.4), 1)
+        shots.append({
+            "index": index + 1,
+            "role": classify(text, index, total),
+            "start": row["start"],
+            "end": row["end"],
+            "seconds": seconds,
+            "sample": text,
+            "words": len(text),
+        })
+
+    # 每个镜头的画面里出现了哪些角标——套用时要按同样的位置放角标
+    for shot in shots:
+        inside = [
+            label["text"] for label in labels
+            if shot["start"] - 0.5 <= label["start"] <= shot["end"] + 0.5
+        ]
+        if inside:
+            shot["labels"] = list(dict.fromkeys(inside))
+
+    # 结构占比：同类角色合并
+    shares: dict[str, float] = {}
+    for shot in shots:
+        shares[shot["role"]] = round(shares.get(shot["role"], 0) + shot["seconds"], 1)
+    structure = [
+        {"role": role, "share": round(seconds / duration, 3), "seconds": seconds}
+        for role, seconds in sorted(shares.items(), key=lambda item: -item[1])
+    ]
+
+    words = sum(shot["words"] for shot in shots)
+    cut_span = cuts or []
+    avg_shot = round(duration / max(len(shots), 1), 1)
+    longest = max(shots, key=lambda s: s["seconds"])
+    pacing = {
+        "cut_count": len(cut_span),
+        "cuts": [round(value, 2) for value in cut_span],
+        "avg_cut_seconds": round(duration / (len(cut_span) + 1), 2) if duration else 0,
+        "sentence_count": len(shots),
+        "words_per_second": round(words / duration, 2) if duration else 0,
+    }
+
+    tips = [f"全长 {duration:.0f} 秒，共 {len(shots)} 句，平均一句 {avg_shot} 秒"]
+    if cut_span:
+        tips.append(f"画面切点 {len(cut_span)} 个，平均每 {duration / (len(cut_span) + 1):.1f} 秒换一次镜")
+    tips.append(f"语速约 {words / duration:.1f} 字/秒，最长的一句 {longest['seconds']} 秒（第 {longest['index']} 句）")
+    if labels:
+        tips.append(f"画面上方有功能区角标 {len(labels)} 处，是这套模板的识别度来源")
+    if len(shots) <= 2 and cut_span:
+        # 纯卡点片：没有口播，卖点全靠音乐切换和字幕点题
+        tips.append(f"这是卡点片：{len(cut_span) + 1} 个镜头跟着音乐切，台词极少，靠画面节奏和字幕点题")
+    last = shots[-1]
+    if last["role"] == "cta":
+        tips.append(f"收尾第 {last['index']} 句是明确的行动号召：" + last["sample"])
+
+    return {
+        "engine": "local",
+        "summary": (
+            f"卡点片：{len(cut_span) + 1} 个镜头、{duration:.0f} 秒，台词只有 {len(shots)} 句"
+            if len(shots) <= 2 and cut_span
+            else f"{len(shots)} 句口播、{len(cut_span)} 个切点，{duration:.0f} 秒讲完一套房源"
+        ),
+        "tone": "口语、短句、第二人称带看口吻" if _HOOK.search(shots[0]["sample"]) else "口语直述",
+        "structure": structure,
+        "pacing": pacing,
+        "shots": shots,
+        "labels": labels,
+        "constraints": {
+            "max_words_per_shot": MAX_WORDS,
+            "total_seconds": round(duration, 1),
+            "words_per_second": round(words / duration, 2),
+        },
+        "tips": tips,
+    }
+
+
+# ------------------------------------------------------------------ 入口
+
+def _fuse(subtitles: list[dict], sentences: list[dict]) -> list[dict]:
+    """以转写的切句为准，用画面字幕校正措辞。
+
+    转写听得出句子边界，但会把「220平」听成「220瓶」、把「茶几」听成「插起」；
+    画面字幕是设计稿，字不会错，但每半秒才抽一帧，边界是碎的。
+    所以每条字幕只归给时间重叠最多的那一句——不能贪心取窗口，
+    否则相邻两句会互相抢字，出现「推荐一套220平」粘在第二句开头这种事。
+    """
+    if not subtitles:
+        return sentences
+
+    buckets: dict[int, list[dict]] = {id(row): [] for row in sentences}
+    for sub in subtitles:
+        target, best = None, 0.0
+        for row in sentences:
+            overlap = min(sub["end"], row["end"]) - max(sub["start"], row["start"])
+            if overlap > best:
+                target, best = row, overlap
+        if target is not None:
+            buckets[id(target)].append(sub)
+
+    for row in sentences:
+        assigned = sorted(buckets[id(row)], key=lambda s: s["start"])
+        if not assigned:
+            continue
+        pieces: list[str] = []
+        for sub in assigned:
+            text = sub["text"]
+            if any(text in kept for kept in pieces):   # 「应俱全」已被「一应俱全」包含
+                continue
+            pieces = [kept for kept in pieces if kept not in text]
+            pieces.append(text)
+        fused = "".join(pieces)
+        if len(re.sub(r"\s", "", fused)) >= 2:
+            row["spoken"] = row["text"]
+            row["text"] = fused
+
+    # 转写整段漏掉的地方，用那段字幕补回来，避免内容凭空消失
+    filled: list[dict] = []
+    for row in sentences:
+        if filled and row["start"] - filled[-1]["end"] > 4.0:
+            gap_start, gap_end = filled[-1]["end"], row["start"]
+            orphans = [s for s in subtitles if gap_start < s["start"] < gap_end]
+            if orphans:
+                filled.append({
+                    "start": round(orphans[0]["start"], 2),
+                    "end": round(orphans[-1]["end"] + 0.5, 2),
+                    "text": "".join(dict.fromkeys(s["text"] for s in orphans)),
+                })
+        filled.append(row)
+    return filled
+
+
+def analyze_file(path: Path) -> dict:
+    """完整拆一条片子：时长 → 切点 → 转写 → 字幕 → 合成。"""
+    path = Path(_windows_path(path))
+    if not path.is_file():
+        raise RefVideoError(f"参考视频不存在：{path}")
+
+    caps = probe_capabilities()
+    if not caps["speech_ready"]:
+        raise RefVideoError("本地语音模型未就绪，先运行 tools/fetch_asr_model.py")
+
+    try:
+        duration = probe_duration(path)
+        cuts = scene_cuts(path)
+        sentences = transcribe(path)
+    except (ShotError, AsrError) as error:
+        raise RefVideoError(str(error)) from error
+
+    labels: list[dict] = []
+    if caps["caption_ocr_ready"]:
+        try:
+            frames = _grab_frames(path, fps=1.2)
+            rows = read_captions(frames)
+            labels, subtitles = _split_captions(rows)
+            if sentences:
+                # 口播与字幕都有：时间用转写，文字用字幕
+                sentences = _fuse(subtitles, sentences)
+            elif subtitles:
+                # 纯字幕片（只有 BGM）：底部字幕就是台词
+                sentences = subtitles
+        except Exception:  # noqa: BLE001 - OCR 是增益，失败不该毁掉整条分析
+            labels = []
+
+    spec = build_spec(duration, cuts, sentences, labels)
+    spec["duration"] = round(duration, 1)
+    spec["cuts"] = cuts
+    return spec
+
+
+def analyze_template(template_id: str) -> dict:
+    """后台线程入口：拆解并写回 style_templates。"""
+    with transaction() as connection:
+        row = connection.execute("SELECT * FROM style_templates WHERE id=?", (template_id,)).fetchone()
+    if row is None:
+        raise RefVideoError("模板不存在")
+
+    try:
+        spec = analyze_file(Path(row["source_path"]))
+        transcript = "\n".join(shot["sample"] for shot in spec["shots"])
+        with transaction() as connection:
+            connection.execute(
+                """UPDATE style_templates SET status='ready', spec_json=?, transcript=?,
+                   duration_s=?, error='', updated_at=? WHERE id=?""",
+                (json_dumps(spec), transcript, spec["duration"], utc_now(), template_id),
+            )
+        return spec
+    except Exception as error:  # noqa: BLE001 - 失败必须写回库，界面才知道
+        with transaction() as connection:
+            connection.execute(
+                "UPDATE style_templates SET status='failed', error=?, updated_at=? WHERE id=?",
+                (str(error)[:500], utc_now(), template_id),
+            )
+        raise

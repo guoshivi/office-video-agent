@@ -204,6 +204,34 @@ CREATE TABLE IF NOT EXISTS review_items (
 );
 
 CREATE INDEX IF NOT EXISTS idx_review_items_status ON review_items(status, created_at);
+
+-- 风格模板：从一条参考视频里拆出「脚本结构 + 文案口吻 + 分镜节奏」，
+-- 之后套到别的素材上。只存结构和风格描述，不存参考片的画面。
+CREATE TABLE IF NOT EXISTS style_templates (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL DEFAULT '',
+    source_type TEXT NOT NULL DEFAULT 'upload',  -- upload | douyin | xiaohongshu
+    source_url TEXT NOT NULL DEFAULT '',
+    source_path TEXT NOT NULL DEFAULT '',
+    duration_s REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending',      -- pending | analyzing | ready | failed
+    spec_json TEXT NOT NULL DEFAULT '',
+    transcript TEXT NOT NULL DEFAULT '',
+    error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_style_templates_status ON style_templates(status, created_at);
+
+-- 模板向量：让「这套房源该用哪条模板」可以按语义找，而不是靠人工挑。
+CREATE TABLE IF NOT EXISTS template_embeddings (
+    template_id TEXT PRIMARY KEY REFERENCES style_templates(id) ON DELETE CASCADE,
+    model TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    vector_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 DEFAULT_SETTINGS = {

@@ -12,6 +12,7 @@ import httpx
 from .db import DATA_DIR, EXPORT_DIR, get_settings, transaction, utc_now
 from .hygiene import clean_internal_sentences
 from .services import get_task
+from .shots import probe_duration
 
 logger = logging.getLogger(__name__)
 
@@ -168,26 +169,45 @@ def _material_root(client: "WorkbenchClient") -> Path:
     """工作台只接受位于授权 NAS 根目录内的素材/输出路径。
 
     优先用手工配置的 workbench_material_root；没配就向工作台要 /api/roots，
-    挑第一个本机真实存在的根目录，把素材镜像进去，而不是去改对方配置。
+    逐个做**可写探测**（建一个临时子目录再删掉）——Windows 对没登录的
+    NAS 共享，is_dir() 都可能返回 True，但一建目录就报「用户名或密码
+    不正确」。只有探测通过的根才敢用。
     """
     configured = (get_settings().get("workbench_material_root") or "").strip()
     if configured:
         root = Path(configured)
-        if root.is_dir():
+        if _root_writable(root):
             return root
-        raise WorkbenchError(f"素材根目录不存在：{configured}")
+        raise WorkbenchError(f"素材根目录不可用或没有写权限：{configured}")
 
     try:
         roots = client.get("/api/roots") or []
     except Exception as error:
         raise WorkbenchError(f"无法读取工作台授权目录：{error}") from error
+    problems: list[str] = []
     for item in roots:
         candidate = Path(str(item.get("path") or ""))
-        if candidate.is_dir():
+        if _root_writable(candidate):
             return candidate
+        problems.append(str(candidate))
     raise WorkbenchError(
-        "工作台的授权目录都不在本机可访问，请在系统设置里填写 workbench_material_root"
+        "工作台的授权目录在本机都不可写（NAS 未登录或目录不存在）："
+        + "；".join(problems)
+        + "。请先在本机登录 NAS（net use），或在系统设置里把渲染引擎切到 local。"
     )
+
+
+def _root_writable(root: Path) -> bool:
+    """探测根目录真的能建文件：能建临时目录并删掉才算通过。"""
+    try:
+        if not root.is_dir():
+            return False
+        probe = root / ".ova-write-probe"
+        probe.mkdir(parents=True, exist_ok=False)
+        probe.rmdir()
+        return True
+    except OSError:
+        return False
 
 
 def _prepare_source(task: dict, material_root: Path) -> Path:
@@ -218,6 +238,14 @@ def _render_settings(task: dict, safe_mode: bool = False) -> dict:
         gap = float(settings.get("render_sentence_gap") or 0.22)
     except ValueError:
         gap = 0.22
+    # target_duration=0 表示「根据原素材时长出片」：探测原始视频的真实长度
+    target_seconds = int(task["target_duration"])
+    if target_seconds <= 0:
+        try:
+            target_seconds = int(probe_duration(task["source_video_path"]))
+        except Exception as error:  # noqa: BLE001 - 探测失败就退回默认值
+            logger.warning("按原素材时长出片：读不到素材时长（%s），退回 45 秒", error)
+            target_seconds = 45
     return {
         "voice": True,
         "speaker": speaker,
@@ -238,7 +266,7 @@ def _render_settings(task: dict, safe_mode: bool = False) -> dict:
         "flower_enabled": False if safe_mode else _flag(settings, "render_flower", "0"),
         "sfx_enabled": False if safe_mode else _flag(settings, "render_sfx", "0"),
         "sentence_gap_seconds": 0.10 <= gap <= 1.0 and gap or 0.22,
-        "target_seconds": int(task["target_duration"]),
+        "target_seconds": target_seconds,
         "width": width,
         "height": height,
         "fps": 30,
@@ -294,6 +322,8 @@ _NO_RETRY_HINTS = (
     "连不上", "无法读取工作台", "工作台未配置", "请先在系统设置", "不在授权", "找不到 ffmpeg",
     # 显卡被别的程序占着，立刻重试必然还是撞车，只会让人多等一轮
     "显卡正忙", "显存",
+    # 授权根目录是 NAS 共享而本机没有登录凭据，重试一次也是同样的错
+    "用户名或密码不正确", "无法访问", "登录失败",
 )
 
 
@@ -362,6 +392,10 @@ def render_task(task_id: str) -> None:
     if task is None:
         return
     with RENDER_LOCK:
+        engine = str(get_settings().get("render_engine") or "workbench").strip().lower()
+        if engine == "local":
+            _render_locally(task_id, task, "按设置使用本地渲染引擎")
+            return
         try:
             _render_once(task_id, task)
             return
@@ -371,14 +405,76 @@ def render_task(task_id: str) -> None:
         # 工作台的贴纸/花字/音效是模型临时决定的，模型给错一个资源名整条就废。
         # 这种失败不该让中介白等十分钟，关掉包装再跑一次。
         if not _worth_retrying(message):
-            _set_task_state(task_id, "failed", _failure_stage(message), 0, message)
+            # 授权根目录不可达（NAS 没登录、目录不在本机）这类错误，
+            # 降级重试也是白等，直接换本机渲染引擎兜底。
+            _render_locally(task_id, task, f"工作台素材根不可用（{message[:120]}），改用本地渲染")
             return
         _set_task_state(task_id, "processing", "首次出片失败，正在用最稳妥的参数重试", 50)
         try:
             _render_once(task_id, task, safe_mode=True)
         except Exception as second:
             detail = str(second)[:1500] if str(second) else second.__class__.__name__
+            # 降级重试也失败：最后再试一次本地渲染，能救回来就不用人工折腾
+            try:
+                _render_locally(task_id, task, "工作台两次出片均失败，最后改用本地渲染")
+                return
+            except Exception as local_error:
+                local_detail = str(local_error)[:500] if str(local_error) else "未知错误"
             _set_task_state(
                 task_id, "failed", "出片失败（已降级重试）", 0,
-                f"{message}\n\n降级重试仍失败：{detail}",
+                f"{message}\n\n降级重试仍失败：{detail}\n\n本地渲染兜底也失败：{local_detail}",
             )
+
+
+def _render_locally(task_id: str, task: dict, reason: str) -> None:
+    """本机 ffmpeg 出片兜底。
+
+    走独立子进程（app.render_cli）：渲染链路会加载 onnxruntime + torch，
+    Windows 上这类 native 依赖偶尔会把宿主进程带崩。子进程崩了服务还活着，
+    这条任务照样能拿到明确的失败原因。
+    """
+    import subprocess
+    import sys
+
+    from .db import BASE_DIR  # noqa: F401 - 只是为了确认工程根可用
+
+    logger.warning("任务 %s 切换本地渲染：%s", task["task_no"], reason)
+    _set_task_state(task_id, "processing", f"{reason}", 10)
+    command = [sys.executable, "-m", "app.render_cli", task_id]
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(Path(__file__).resolve().parent.parent),
+            capture_output=True,
+            text=True,
+            timeout=1800,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        _set_task_state(task_id, "failed", "本地渲染超时", 0, "本地渲染超过 30 分钟未完成")
+        return
+
+    payload: dict = {}
+    for line in reversed((completed.stdout or "").strip().splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                payload = json.loads(line)
+                break
+            except ValueError:
+                continue
+
+    if completed.returncode == 0 and payload.get("ok"):
+        with transaction() as connection:
+            connection.execute(
+                """UPDATE tasks SET status='completed', stage='本地渲染完成', progress=100,
+                   output_video_path=?, error_message='', updated_at=? WHERE id=?""",
+                (str(payload.get("output") or ""), utc_now(), task_id),
+            )
+        return
+
+    detail = payload.get("error") or (completed.stderr or "").strip()[-800:] or "子进程异常退出"
+    _set_task_state(
+        task_id, "failed", "本地渲染失败", 0,
+        f"本地渲染子进程退出码 {completed.returncode}：{detail}",
+    )

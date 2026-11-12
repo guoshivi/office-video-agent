@@ -31,6 +31,7 @@ from .shots import (
 from .services import (
     create_task_record,
     export_workbench_package,
+    generate_script,
     get_task,
     new_task_no,
     public_property,
@@ -140,13 +141,22 @@ class StatusUpdate(BaseModel):
 
 class SettingsUpdate(BaseModel):
     public_contact: str = Field(default="", max_length=300)
-    default_duration: int = Field(default=45, ge=10, le=180)
+    # 0 = 新任务默认跟随原素材时长；否则 10–180 秒
+    default_duration: int = Field(default=45, ge=0, le=180)
     default_aspect_ratio: str = Field(default="9:16")
     default_voice: str = Field(default="female_warm")
     workbench_path: str = Field(default="", max_length=1000)
     workbench_url: str = Field(default="", max_length=500)
     workbench_output_root: str = Field(default="", max_length=1000)
     workbench_material_root: str = Field(default="", max_length=1000)
+    render_engine: str = Field(default="workbench", max_length=20)
+    export_output_root: str = Field(default="", max_length=1000)
+    local_audio_mode: str = Field(default="mix", max_length=20)
+    # 大模型：留空表示不用 AI，文案走规则版
+    llm_provider: str = Field(default="", max_length=20)
+    llm_api_key: str = Field(default="", max_length=300)
+    llm_base_url: str = Field(default="", max_length=300)
+    llm_model: str = Field(default="", max_length=120)
 
 
 @app.get("/api/health")
@@ -304,6 +314,79 @@ def list_tasks(limit: int = Query(default=100, ge=1, le=500), offset: int = Quer
     return {"items": [serialize_task(row, include_script=False) for row in rows], "total": total}
 
 
+class CopyGenerate(BaseModel):
+    property_id: str = Field(default="")
+    target_duration: int = Field(default=45, ge=0, le=180)
+    extra: str = Field(default="", max_length=300)
+
+
+class CopyPolish(BaseModel):
+    property_id: str = Field(default="")
+    script: str = Field(default="", max_length=4000)
+
+
+def _require_property(property_id: str):
+    if not property_id:
+        raise HTTPException(400, "请先选择房源")
+    with transaction() as connection:
+        row = connection.execute("SELECT * FROM properties WHERE id=?", (property_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404, "房源不存在")
+    return row
+
+
+def _copy_facts(row) -> dict:
+    """交给模型的事实清单。租金一律不传，避免它自己报价。"""
+    raw = {
+        "区域": row["region_norm"], "楼栋": row["building_norm"], "房号": row["room_norm"],
+        "面积": row["area_raw"], "格局": row["partition_raw"],
+        "朝向": row["orientation_raw"], "家具装修": row["furnishing_layout_raw"],
+    }
+    return {key: str(value).strip() for key, value in raw.items() if (value or "").strip()}
+
+
+@app.get("/api/copy/status")
+def copy_status():
+    from .llm import status as llm_status
+
+    return llm_status()
+
+
+@app.post("/api/copy/generate")
+def copy_generate(payload: CopyGenerate):
+    """让大模型写一版口播稿。没配模型或调用失败时退回规则版，不让用户卡住。"""
+    from .llm import LLMError, write_script as llm_write
+
+    row = _require_property(payload.property_id)
+    facts = _copy_facts(row)
+    duration = payload.target_duration or 45
+    try:
+        script = llm_write(facts, duration, payload.extra.strip())
+        return {"script": script, "source": "ai", "message": "AI 已按房源字段写好，可直接改"}
+    except LLMError as error:
+        script, warnings = generate_script(row, duration)
+        return {
+            "script": script,
+            "source": "rules",
+            "message": f"AI 不可用（{error}），已用规则版兜底",
+            "warnings": warnings,
+        }
+
+
+@app.post("/api/copy/polish")
+def copy_polish(payload: CopyPolish):
+    from .llm import LLMError, polish_script
+
+    text = (payload.script or "").strip()
+    if len(text) < 10:
+        raise HTTPException(400, "先把要润色的文案贴进来")
+    facts = _copy_facts(_require_property(payload.property_id)) if payload.property_id else {}
+    try:
+        return {"script": polish_script(text, facts), "source": "ai"}
+    except LLMError as error:
+        raise HTTPException(400, str(error)) from error
+
+
 @app.post("/api/tasks")
 async def create_task(
     property_id: str = Form(...),
@@ -312,9 +395,10 @@ async def create_task(
     aspect_ratio: str = Form(default="9:16"),
     voice: str = Form(default="female_warm"),
     style: str = Form(default="professional"),
+    script: str = Form(default=""),
 ):
-    if not 10 <= target_duration <= 180:
-        raise HTTPException(400, "目标时长需在 10–180 秒之间")
+    if not (target_duration == 0 or 10 <= target_duration <= 180):
+        raise HTTPException(400, "目标时长需在 10–180 秒之间，或填 0 表示跟随原素材时长")
     if aspect_ratio not in {"9:16", "16:9"}:
         raise HTTPException(400, "当前视频工作台支持 9:16 或 16:9")
     with transaction() as connection:
@@ -352,6 +436,7 @@ async def create_task(
             style=style,
             source="webui",
             task_no=task_no,
+            script_override=script,
         )
     except Exception:
         shutil.rmtree(task_dir, ignore_errors=True)
@@ -471,6 +556,14 @@ def update_settings(payload: SettingsUpdate):
         raise HTTPException(400, "当前视频工作台支持 9:16 或 16:9")
     if values["workbench_url"] and not values["workbench_url"].startswith(("http://", "https://")):
         raise HTTPException(400, "视频工作台 API 地址必须以 http:// 或 https:// 开头")
+    if values["render_engine"] not in {"workbench", "local"}:
+        raise HTTPException(400, "渲染引擎只能是 workbench 或 local")
+    if values["local_audio_mode"] not in {"mix", "original", "voice", "mute"}:
+        raise HTTPException(400, "本地出片原声只能是 mix / original / voice / mute")
+    if values["llm_provider"] and values["llm_provider"] not in {"ark", "deepseek"}:
+        raise HTTPException(400, "模型服务商只支持 ark（豆包）或 deepseek")
+    if values["llm_base_url"] and not values["llm_base_url"].startswith(("http://", "https://")):
+        raise HTTPException(400, "模型接口地址必须以 http:// 或 https:// 开头")
     with transaction() as connection:
         for key, value in values.items():
             connection.execute(
@@ -494,7 +587,8 @@ def data_info():
 class ClipBind(BaseModel):
     query: str = Field(default="", max_length=200)
     property_id: str = Field(default="", max_length=64)
-    target_duration: int = Field(default=45, ge=10, le=180)
+    # 0 = 跟随原素材时长；否则 10–180 秒
+    target_duration: int = Field(default=45, ge=0, le=180)
     aspect_ratio: str = "9:16"
     voice: str = Field(default="female_warm", max_length=40)
     style: str = Field(default="professional", max_length=40)
@@ -600,6 +694,268 @@ def update_storyboard(task_id: str, payload: StoryboardPayload):
         return save_storyboard(task_id, [shot.model_dump() for shot in payload.shots])
     except ShotError as error:
         raise HTTPException(400, str(error)) from error
+
+
+def serialize_template(row, detail: bool = False) -> dict:
+    import json as _json
+
+    item = {
+        "id": row["id"],
+        "name": row["name"],
+        "source_type": row["source_type"],
+        "source_url": row["source_url"],
+        "duration_s": row["duration_s"],
+        "status": row["status"],
+        "error": row["error"],
+        "created_at": row["created_at"],
+    }
+    if row["spec_json"]:
+        try:
+            spec = _json.loads(row["spec_json"])
+        except ValueError:
+            spec = {}
+        item["summary"] = spec.get("summary", "")
+        item["tone"] = spec.get("tone", "")
+        item["shot_count"] = len(spec.get("shots") or [])
+        if detail:
+            item["spec"] = spec
+            item["transcript"] = row["transcript"]
+    return item
+
+
+@app.get("/api/library/status")
+def library_status():
+    """视频库现状：能拆多少条、拆了多少、有没有建过向量。"""
+    from .asr import probe_capabilities
+    from .db import init_db
+    from .semantic import is_configured, semantic_status
+
+    init_db()
+    with transaction() as connection:
+        ready = connection.execute(
+            "SELECT COUNT(*) AS n FROM style_templates WHERE status='ready'"
+        ).fetchone()["n"]
+        total = connection.execute("SELECT COUNT(*) AS n FROM style_templates").fetchone()["n"]
+        indexed = connection.execute("SELECT COUNT(*) AS n FROM template_embeddings").fetchone()["n"]
+    import app.library as library
+
+    return {
+        "templates": total,
+        "ready": ready,
+        "embedded": indexed,
+        "semantic_configured": is_configured(),
+        "semantic": semantic_status(),
+        "capabilities": probe_capabilities(),
+        "progress": library.PROGRESS,
+    }
+
+
+@app.post("/api/library/scan")
+def library_scan(payload: dict):
+    import app.library as library
+
+    folder = str(payload.get("folder") or "").strip()
+    if not folder:
+        raise HTTPException(400, "请提供文件夹路径")
+    try:
+        files = library.scan(folder)
+    except library.LibraryError as error:
+        raise HTTPException(400, str(error)) from error
+    return {"folder": folder, "count": len(files), "files": [path.name for path in files]}
+
+
+@app.post("/api/library/ingest", status_code=202)
+def library_ingest(payload: dict):
+    import app.library as library
+
+    folder = str(payload.get("folder") or "").strip()
+    limit = int(payload.get("limit") or 0)
+    if not folder:
+        raise HTTPException(400, "请提供文件夹路径")
+    try:
+        return library.start_ingest(folder, limit=limit)
+    except library.LibraryError as error:
+        raise HTTPException(400, str(error)) from error
+
+
+@app.post("/api/library/reindex")
+def library_reindex():
+    import app.library as library
+
+    return library.reindex_all()
+
+
+@app.get("/api/templates/search")
+def search_templates(q: str = Query(min_length=1), limit: int = Query(default=5, ge=1, le=20)):
+    import app.library as library
+
+    results = library.find_templates(q, limit=limit)
+    with transaction() as connection:
+        for item in results:
+            row = connection.execute(
+                "SELECT name, duration_s, spec_json FROM style_templates WHERE id=?", (item["template_id"],)
+            ).fetchone()
+            if row:
+                import json as _json
+
+                spec = _json.loads(row["spec_json"] or "{}")
+                item["name"] = row["name"]
+                item["duration_s"] = row["duration_s"]
+                item["summary"] = spec.get("summary", "")
+                item["shots"] = len(spec.get("shots") or [])
+    return {"query": q, "items": results}
+
+
+@app.get("/api/templates/suggest")
+def suggest_templates(task_id: str = Query(min_length=1), limit: int = Query(default=3, ge=1, le=10)):
+    """按任务对应的房源，推荐最像的历史片子。"""
+    import app.library as library
+
+    with transaction() as connection:
+        task = connection.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if task is None:
+            raise HTTPException(404, "任务不存在")
+        prop = connection.execute("SELECT * FROM properties WHERE id=?", (task["property_id"],)).fetchone()
+    if prop is None:
+        raise HTTPException(404, "任务没有关联房源")
+    return {"task_id": task_id, "items": library.suggest_for_property(prop, limit=limit)}
+
+
+@app.get("/api/templates")
+def list_templates(limit: int = Query(default=30, ge=1, le=200)):
+    from .style_template import TEMPLATE_DIR, is_configured
+
+    with transaction() as connection:
+        rows = connection.execute(
+            "SELECT * FROM style_templates ORDER BY created_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+    return {"items": [serialize_template(row) for row in rows], "configured": is_configured()}
+
+
+@app.get("/api/templates/{template_id}")
+def read_template(template_id: str):
+    from .style_template import TEMPLATE_DIR
+
+    with transaction() as connection:
+        row = connection.execute("SELECT * FROM style_templates WHERE id=?", (template_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404, "模板不存在")
+    return serialize_template(row, detail=True)
+
+
+@app.post("/api/templates", status_code=202)
+def create_template(video: UploadFile = File(...), name: str = Form(default="")):
+    import uuid
+
+    from .style_template import TEMPLATE_DIR, start_analysis
+
+    template_id = uuid.uuid4().hex[:12]
+    target_dir = TEMPLATE_DIR / template_id
+    target_dir.mkdir(parents=True, exist_ok=True)
+    suffix = Path(video.filename or "source.mp4").suffix or ".mp4"
+    target = target_dir / f"source{suffix}"
+    with target.open("wb") as handle:
+        shutil.copyfileobj(video.file, handle)
+
+    if target.stat().st_size == 0:
+        raise HTTPException(400, "上传的参考视频是空文件")
+
+    now = utc_now()
+    display = (name or Path(video.filename or "参考视频").stem)[:80]
+    with transaction() as connection:
+        connection.execute(
+            """INSERT INTO style_templates(id, name, source_type, source_path, status, created_at, updated_at)
+               VALUES (?, ?, 'upload', ?, 'pending', ?, ?)""",
+            (template_id, display, str(target), now, now),
+        )
+    start_analysis(template_id)
+    return {"id": template_id, "status": "pending"}
+
+
+@app.post("/api/templates/from-url", status_code=202)
+def create_template_from_url(payload: dict):
+    import uuid
+
+    from .style_template import StyleTemplateError, TEMPLATE_DIR, download_video, start_analysis
+
+    url = str((payload or {}).get("url") or "").strip()
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(400, "请填写 http/https 开头的视频链接")
+    template_id = uuid.uuid4().hex[:12]
+    try:
+        path = download_video(url, TEMPLATE_DIR / template_id / "source.mp4")
+    except StyleTemplateError as error:
+        raise HTTPException(400, str(error)) from error
+
+    now = utc_now()
+    source_type = "douyin" if "douyin" in url or "iesdouyin" in url else "xiaohongshu" if "xiaohongshu" in url or "xhslink" in url else "upload"
+    with transaction() as connection:
+        connection.execute(
+            """INSERT INTO style_templates(id, name, source_type, source_url, source_path, status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)""",
+            (template_id, Path(path).stem[:80], source_type, url, str(path), now, now),
+        )
+    start_analysis(template_id)
+    return {"id": template_id, "status": "pending"}
+
+
+@app.delete("/api/templates/{template_id}")
+def delete_template(template_id: str):
+    from .style_template import TEMPLATE_DIR
+
+    with transaction() as connection:
+        row = connection.execute("SELECT id FROM style_templates WHERE id=?", (template_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, "模板不存在")
+        connection.execute("DELETE FROM style_templates WHERE id=?", (template_id,))
+    shutil.rmtree(TEMPLATE_DIR / template_id, ignore_errors=True)
+    return {"deleted": template_id}
+
+
+@app.post("/api/tasks/{task_id}/apply-template")
+def apply_template(task_id: str, payload: dict):
+    from .style_template import StyleTemplateError, apply_to_task
+
+    template_id = str((payload or {}).get("template_id") or "").strip()
+    if not template_id:
+        raise HTTPException(400, "请先选择模板")
+    try:
+        return apply_to_task(task_id, template_id)
+    except StyleTemplateError as error:
+        raise HTTPException(400, str(error)) from error
+
+
+@app.post("/api/style/render", status_code=202)
+def style_render(payload: dict):
+    """按模板 + 素材出一条成片。body:
+
+    template_id / source 必填；storyboard 或 facts 二选一给文案来源；
+    audio_mode ∈ mix(原声压低+口播) / original(只原声) / voice(只口播) / mute。
+    """
+    from .style_render import RenderError, start_render_job
+
+    try:
+        job = start_render_job(payload or {})
+    except RenderError as error:
+        raise HTTPException(400, str(error)) from error
+    return job
+
+
+@app.get("/api/style/render/{render_id}")
+def style_render_status(render_id: str):
+    from .style_render import RENDER_JOBS
+
+    job = RENDER_JOBS.get(render_id)
+    if job is None:
+        raise HTTPException(404, "渲染任务不存在")
+    return job
+
+
+@app.get("/api/style/renders")
+def style_renders():
+    from .style_render import RENDER_JOBS
+
+    return {"items": sorted(RENDER_JOBS.values(), key=lambda job: job["created_at"], reverse=True)}
 
 
 @app.get("/api/bitable/status")

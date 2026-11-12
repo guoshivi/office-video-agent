@@ -207,13 +207,39 @@
               <div class="panel-title"><div><h4>生成与发布默认值</h4><p>新建任务时可以再次调整。</p></div></div>
               <label>公开咨询引导<input name="public_contact" maxlength="300" placeholder="例如：欢迎私信咨询房源详情"></label>
               <div class="form-row">
-                <label>默认时长（秒）<input name="default_duration" type="number" min="10" max="180"></label>
+                <label>默认时长（秒，填 0 = 根据原素材）<input name="default_duration" type="number" min="0" max="180"></label>
                 <label>默认比例<select name="default_aspect_ratio"><option>9:16</option><option>16:9</option></select></label>
               </div>
               <label>默认声音<select name="default_voice"><option value="female_warm">温暖女声</option><option value="male_professional">专业男声</option></select></label>
               <label>视频工作台 API 地址<input name="workbench_url" placeholder="http://192.168.x.x:8765"></label>
               <label>工作台输出目录<input name="workbench_output_root" placeholder="data/workbench_outputs"></label>
-              <label>工作台授权素材根目录<input name="workbench_material_root" placeholder="留空则自动探测"><small>工作台只接受授权 NAS 根目录内的素材与输出，留空时自动读取 /api/roots。</small></label>
+              <label>工作台授权素材根目录<input name="workbench_material_root" placeholder="留空则自动探测"><small>工作台只接受授权 NAS 根目录内的素材与输出，留空时自动读取 /api/roots（会跳过没登录的 NAS）。</small></label>
+              <div class="form-row">
+                <label>渲染引擎<select name="render_engine">
+                  <option value="workbench">工作台（远程机器）</option>
+                  <option value="local">本机 FFmpeg</option>
+                </select></label>
+                <label>本地出片原声<select name="local_audio_mode">
+                  <option value="mix">原声压低 + 口播</option>
+                  <option value="original">只保留原声</option>
+                  <option value="voice">只要口播</option>
+                  <option value="mute">无声</option>
+                </select></label>
+              </div>
+              <label>出品目录（成片另存位置）<input name="export_output_root" placeholder="例如 D:\出品 或 data\exports"><small>出片完成后自动复制一份到这里；留空则只保存在系统 data 目录。工作台授权目录在本机不可用时，可把渲染引擎切到「本机 FFmpeg」。</small></label>
+              <div class="settings-group">
+                <p class="settings-group-title">AI 文案（可选）</p>
+                <div class="form-row">
+                  <label>模型服务商<select name="llm_provider">
+                    <option value="">不用 AI（走规则版）</option>
+                    <option value="ark">豆包（火山方舟）</option>
+                    <option value="deepseek">DeepSeek</option>
+                  </select></label>
+                  <label>模型名<input name="llm_model" placeholder="留空用默认"></label>
+                </div>
+                <label>API Key<input name="llm_api_key" type="password" placeholder="粘贴控制台里的 key" autocomplete="off"><small>豆包默认 doubao-seed-1-6-250615，DeepSeek 默认 deepseek-chat；填了 key 新建任务里就能「AI 生成」「润色」。</small></label>
+                <label>接口地址（一般不用填）<input name="llm_base_url" placeholder="留空用官方地址"></label>
+              </div>
               <div class="form-row">
                 <label>每日发布上限<input name="publish_daily_limit" type="number" min="1" max="20"></label>
                 <label>最小间隔（分钟）<input name="publish_min_interval_minutes" type="number" min="0" max="1440"></label>
@@ -273,10 +299,22 @@
       <div class="form-grid">
         <label class="full">关联房源<select name="property_id" id="task-property" required><option value="">请先导入房源</option></select><small>通过房源绑定避免画面识别错误；待确认房源会先显示警示。</small></label>
         <label class="full">实拍视频<input type="file" name="video" id="video-input" accept="video/mp4,video/quicktime,video/x-m4v,video/x-msvideo,video/x-matroska" required><small id="video-file-name">MP4、MOV、M4V、AVI、MKV，单个不超过 2 GB</small></label>
-        <div class="form-field">目标时长（秒）<span class="duration-row"><input name="target_duration" id="target-duration" type="number" min="10" max="180" value="45"><button type="button" class="duration-use-source" id="use-source-duration" disabled title="先选视频，再点这里按原片长度出片">跟原片</button></span></div>
+        <div class="form-field">目标时长（秒）<span class="duration-row"><input name="target_duration" id="target-duration" type="number" min="10" max="180" value="45"><button type="button" class="duration-use-source" id="use-source-duration" disabled title="先选视频，再点这里开启「根据原素材」模式">跟原片</button></span></div>
         <label>视频比例<select name="aspect_ratio"><option>9:16</option><option>16:9</option></select></label>
         <label>声音<select name="voice"><option value="female_warm">温暖女声</option><option value="male_professional">专业男声</option></select></label>
         <label>风格<select name="style"><option value="professional">专业简洁</option><option value="warm">自然亲和</option></select></label>
+        <div class="form-field full copy-field">
+          <div class="copy-head">
+            <span>口播文案</span>
+            <span class="copy-actions">
+              <em id="copy-model-hint"></em>
+              <button type="button" class="button button-sm button-ghost" id="btn-ai-copy">AI 生成</button>
+              <button type="button" class="button button-sm button-ghost" id="btn-polish-copy">润色</button>
+            </span>
+          </div>
+          <textarea name="script" id="task-script" rows="7" placeholder="留空 = 按房源字段自动生成；也可以自己写，或点「AI 生成」写一版再改"></textarea>
+          <small>一句话一行，出片时一句配一个镜头、一句一条字幕。留空就用系统规则版。</small>
+        </div>
       </div>
       <div class="notice">提交后会生成可编辑的口播草稿。真实配音与成片由视频工作台完成。</div>
       <div class="dialog-actions"><button type="button" class="button button-ghost" data-close="task-dialog">取消</button><button class="button button-primary" type="submit">上传并创建草稿</button></div>

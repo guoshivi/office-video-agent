@@ -1,0 +1,651 @@
+"""风格成片渲染：把「干净素材 + 角标 + 字幕 + 口播」按模板合成一条片子。
+
+输入是一个 storyboard：每句文案、显示时间、可选的功能区角标，以及从素材里
+选哪一段画面。渲染分四层：
+
+1. **画面** —— 智能选镜（shot_select）挑干净段，Ken Burns 缓推/缓拉
+   交替让空镜动起来，轻微提亮提饱和；
+2. **底部字幕** —— 模板里学来的样式：白色特粗体、黑描边、居底居中，
+   折行优先在标点处断，不会把「一套」孤零零甩到第二行；
+3. **顶部角标** —— 功能区名 + 一句话卖点，左上两行；
+4. **声音** —— audio_mode 自己选：
+   mix     原声压低当 BGM + 逐句口播（默认）
+   original 只保留素材原声（不合成口播，字幕照上）
+   voice    只口播，干净人声
+   mute     无声，适合发平台前再自己配
+
+字体直接用剪映工程里提取的那两个（Noto Sans SC Black / 锐字真言体），
+跟他们手工剪辑的片子保持同款观感。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import re
+import shutil
+import subprocess
+import tempfile
+import time
+from pathlib import Path
+
+from .asr import _windows_path
+from .db import get_settings, utc_now
+from .shot_select import pick_clips
+from .shots import ShotError, _find_binary
+
+logger = logging.getLogger(__name__)
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+DATA_RENDER_DIR = BASE_DIR / "data" / "render-env"
+
+# 剪映工程里提取的字体（跟他们手剪的片子同款）
+_JIANYING_FONTS = Path(r"D:\剪映成品视频\wonderfulVideos14770298223804407620\edit")
+# 剪映工程里的字体是 CFF 轮廓的 OTF，gyan 版 ffmpeg 的 freetype 读到会直接段错误，
+# 所以预先转成 TTF（tools/fetch_fonts.py 生成）放在 data/render-env 下。
+FONT_BLACK = BASE_DIR / "data" / "render-env" / "NotoSansSCBlack.ttf"
+FONT_BODY = BASE_DIR / "data" / "render-env" / "NotoSansSCBold.ttf"
+FONT_FALLBACK = Path(r"C:\Windows\Fonts\msyhbd.ttc")
+
+TTS_VOICE = "zh-CN-XiaoxiaoNeural"
+TTS_RATE = "+10%"          # 中介口播普遍偏快，慢了反而假
+CAPTION_SIZE = 76
+CAPTION_BOTTOM = 1372      # 字幕行的顶部 y（1080x1920 画布）
+LABEL_SIZE = 84
+LABEL_SUB_SIZE = 50
+LABEL_X = 90
+LABEL_Y = 350
+
+AUDIO_MODES = {"mix", "original", "voice", "mute"}
+
+# Ken Burns：缓推到 1.12 倍再缓拉回来，交替使用，空镜就有呼吸感
+ZOOM_IN = 0.12             # 最大推近幅度
+CANVAS_W, CANVAS_H = 1080, 1920
+CANVAS_WIDE_W, CANVAS_WIDE_H = 1920, 1080
+
+
+class RenderError(RuntimeError):
+    pass
+
+
+def _ffmpeg() -> str:
+    try:
+        return _find_binary("ffmpeg")
+    except ShotError as error:
+        raise RenderError(str(error)) from error
+
+
+def _ffprobe() -> str:
+    try:
+        return _find_binary("ffprobe")
+    except ShotError as error:
+        raise RenderError(str(error)) from error
+
+
+def media_duration(path: str | Path) -> float:
+    """容器时长（音轨常常比视频流短，做节奏分配不能用这个）。"""
+    completed = subprocess.run(
+        [_ffprobe(), "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", _windows_path(path)],
+        capture_output=True, text=True, check=False,
+    )
+    try:
+        return float(completed.stdout.strip())
+    except ValueError as error:
+        raise RenderError(f"读不到时长：{path}") from error
+
+
+def video_duration(path: str | Path) -> float:
+    """视频流时长：节奏分配、收口都以画面为准。"""
+    completed = subprocess.run(
+        [_ffprobe(), "-v", "error", "-select_streams", "v:0", "-show_entries",
+         "stream=duration", "-of", "csv=p=0", _windows_path(path)],
+        capture_output=True, text=True, check=False,
+    )
+    try:
+        value = float(completed.stdout.strip())
+    except ValueError as error:
+        raise RenderError(f"读不到视频流时长：{path}") from error
+    return value
+
+
+def _has_audio(path: Path) -> bool:
+    completed = subprocess.run(
+        [_ffprobe(), "-v", "error", "-select_streams", "a", "-show_entries", "stream=codec_type",
+         "-of", "csv=p=0", _windows_path(path)],
+        capture_output=True, text=True, check=False,
+    )
+    return bool(completed.stdout.strip())
+
+
+# ------------------------------------------------------------------ 文案转语音
+
+def synth_speech(text: str, out_path: Path, voice: str = TTS_VOICE, rate: str = TTS_RATE) -> Path:
+    """合成一句口播。断句用逗号喂给 TTS，停顿会更自然。"""
+    import edge_tts
+
+    async def run() -> None:
+        communicate = edge_tts.Communicate(text, voice, rate=rate)
+        await communicate.save(str(out_path))
+
+    asyncio.run(run())
+    if not out_path.is_file() or out_path.stat().st_size == 0:
+        raise RenderError(f"语音合成失败：{text[:20]}")
+    return out_path
+
+
+# ------------------------------------------------------------------ drawtext
+
+def _escape(text: str) -> str:
+    """drawtext 的文本要转义 : ' \\ % , 这几个字符。"""
+    return (
+        text.replace("\\", "\\\\")
+        .replace(":", "\\:")
+        .replace("'", "\\'")
+        .replace("%", "\\%")
+        .replace(",", "\\,")
+    )
+
+
+_PUNCT = "，、。！？；：,.!?;: "
+
+
+def _wrap(text: str, per_line: int = 12) -> str:
+    """底部字幕折行：优先在标点处断行，断不出来才硬切。
+
+    「今天大家实地看房，推荐一套」按标点断成两行，
+    比硬切成「…推荐一 / 套」体面得多。
+    """
+    if len(text) <= per_line:
+        return text
+    lines: list[str] = []
+    remaining = text
+    while len(remaining) > per_line:
+        window = remaining[: per_line + 1]
+        cut = -1
+        for i in range(len(window) - 1, 3, -1):   # 至少留 4 个字在下一行
+            if window[i - 1] in _PUNCT:
+                cut = i
+                break
+        if cut <= 0:
+            cut = per_line
+        lines.append(remaining[:cut].rstrip(_PUNCT))
+        remaining = remaining[cut:].lstrip(_PUNCT)
+    if remaining:
+        lines.append(remaining)
+    return "\n".join(lines)
+
+
+def _font_param(font: str) -> str:
+    """fontfile 只需要转义盘符冒号，路径统一用正斜杠。"""
+    return font.replace("\\", "/").replace(":", "\\:")
+
+
+def _caption_drawtext(index: int, text: str, start: float, end: float, font: str) -> str:
+    return (
+        f"drawtext=fontfile='{_font_param(font)}'"
+        f":text='{_escape(_wrap(text))}'"
+        f":fontsize={CAPTION_SIZE}:fontcolor=white"
+        f":borderw=6:bordercolor=black"
+        f":shadowx=2:shadowy=4:shadowcolor=black@0.45"
+        f":line_spacing=14"
+        f":x=(w-text_w)/2:y={CAPTION_BOTTOM}"
+        f":enable='between(t,{start:.2f},{end:.2f})'"
+    )
+
+
+def _label_drawtexts(index: int, title: str, sub: str, start: float, end: float, font: str) -> list[str]:
+    items = [
+        f"drawtext=fontfile='{_font_param(font)}'"
+        f":text='{_escape(title)}'"
+        f":fontsize={LABEL_SIZE}:fontcolor=white"
+        f":borderw=5:bordercolor=black@0.75"
+        f":shadowx=1:shadowy=3:shadowcolor=black@0.4"
+        f":x={LABEL_X}:y={LABEL_Y}"
+        f":enable='between(t,{start:.2f},{end:.2f})'"
+    ]
+    if sub:
+        items.append(
+            f"drawtext=fontfile='{_font_param(font)}'"
+            f":text='{_escape(sub)}'"
+            f":fontsize={LABEL_SUB_SIZE}:fontcolor=white"
+            f":borderw=4:bordercolor=black@0.7"
+            f":shadowx=1:shadowy=2:shadowcolor=black@0.4"
+            f":x={LABEL_X + 4}:y={LABEL_Y + LABEL_SIZE + 26}"
+            f":enable='between(t,{start:.2f},{end:.2f})'"
+        )
+    return items
+
+
+# ------------------------------------------------------------------ 画面滤镜
+
+def _zoom_filter(item: dict, index: int, fps: int, canvas: tuple[int, int] = (CANVAS_W, CANVAS_H)) -> str:
+    """一段画面的滤镜链：截段 → 放慢 → Ken Burns → 调色 → 规格。
+
+    zoompan 交替缓推/缓拉：偶数句推近（1.00→1.12），奇数句拉远
+    （1.12→1.00）。先放大 1.25 倍做工作分辨率，推拉时不会露边。
+    """
+    width, height = canvas
+    clip_start, clip_end = item["clip"]
+    duration = max(item["end"] - item["start"], 0.5)
+    frames = max(int(duration * fps), 8)
+    step = ZOOM_IN / frames
+    if index % 2 == 0:
+        zoom_expr = f"min(1+{step:.5f}*on,1.12)"
+    else:
+        zoom_expr = f"max(1.12-{step:.5f}*on,1.0)"
+    # 推拉围绕画面重心
+    x_expr = "iw/2-(iw/zoom/2)"
+    y_expr = "ih/2-(ih/zoom/2)"
+    return (
+        f"trim=start={clip_start:.2f}:end={clip_end:.2f},setpts=(PTS-STARTPTS)/{item['slow']:.4f},"
+        f"fps={fps},"
+        f"scale={int(width * 1.25)}:{int(height * 1.25)},"
+        f"zoompan=z='{zoom_expr}':x='{x_expr}':y='{y_expr}':d=1:s={width}x{height}:fps={fps},"
+        f"eq=brightness=0.02:saturation=1.10:contrast=1.04,"
+        f"setsar=1"
+    )
+
+
+# ------------------------------------------------------------------ 渲染
+
+def _fontconfig_env() -> dict:
+    """gyan 版 ffmpeg 自带 fontconfig 但没有配置文件，不补会直接报错。"""
+    import os
+
+    conf = DATA_RENDER_DIR / "fonts.conf"
+    if not conf.is_file():
+        fonts_dir = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+        cache = DATA_RENDER_DIR / "fc-cache"
+        cache.mkdir(parents=True, exist_ok=True)
+        conf.write_text(
+            '<?xml version="1.0"?>\n'
+            '<!DOCTYPE fontconfig SYSTEM "fonts.dtd">\n'
+            "<fontconfig>\n"
+            f"  <dir>{fonts_dir}</dir>\n"
+            f"  <cachedir>{cache}</cachedir>\n"
+            "</fontconfig>\n",
+            encoding="utf-8",
+        )
+    return {"FONTCONFIG_FILE": str(conf)}
+
+
+def render_storyboard(
+    storyboard: list[dict],
+    source: str | Path,
+    out_path: str | Path,
+    bgm_volume: float = 0.30,
+    fps: int = 30,
+    audio_mode: str = "mix",
+    tts_voice: str = TTS_VOICE,
+    tts_rate: str = TTS_RATE,
+    kenburns: bool = True,
+    canvas: tuple[int, int] = (CANVAS_W, CANVAS_H),
+    goal_seconds: float | None = None,
+) -> Path:
+    """把 storyboard 渲染成片。storyboard 每项：
+
+    {"text": "口播", "label": {"title": "工区", "sub": "可容纳20人办公"} 或省略}
+
+    goal_seconds：目标成片时长。给了就按它铺镜头（短文案多留空镜），
+    不给就按口播的自然长度走。
+
+    audio_mode：
+    - mix      原声压低铺底 + 口播（默认）
+    - original 只保留素材原声（不合成口播，渲染更快）
+    - voice    只口播
+    - mute     无声
+    """
+    if audio_mode not in AUDIO_MODES:
+        raise RenderError(f"audio_mode 只能是 {'/'.join(sorted(AUDIO_MODES))}，收到 {audio_mode!r}")
+    want_voice = audio_mode in {"mix", "voice"}
+
+    source = Path(_windows_path(source))
+    if not source.is_file():
+        raise RenderError(f"素材不存在：{source}")
+    if not _has_audio(source) and audio_mode in {"mix", "original"}:
+        audio_mode = "voice" if len(storyboard) else "mute"
+        want_voice = audio_mode == "voice"
+    ffmpeg = _ffmpeg()
+    font = str(FONT_BLACK if FONT_BLACK.is_file() else (FONT_BODY if FONT_BODY.is_file() else FONT_FALLBACK))
+
+    work = Path(tempfile.mkdtemp(prefix="ova-render-"))
+
+    # 1) 逐句合成口播，定每句的时间窗（时长向目标时长靠，但不超过 10 秒/句）
+    sentences: list[dict] = []
+    for index, item in enumerate(storyboard):
+        speech = None
+        spoken = 0.0
+        if want_voice:
+            speech = synth_speech(item["text"], work / f"tts{index:02d}.mp3", voice=tts_voice, rate=tts_rate)
+            spoken = media_duration(speech)
+        sentences.append({
+            "text": item["text"],
+            "label": item.get("label") or {},
+            "speech": speech,
+            "spoken": spoken,
+        })
+
+    natural = sum(sentence["spoken"] + 0.6 for sentence in sentences) if want_voice else 0.0
+    if want_voice:
+        # 有目标时长就按目标铺：短文案多留空镜呼吸，长文案不硬压
+        goal = max(goal_seconds or 0.0, natural)
+        per = goal / max(len(sentences), 1)
+        for sentence in sentences:
+            sentence["duration"] = min(max(sentence["spoken"] + 0.6, per), 10.0)
+    else:
+        duration_total = video_duration(source)
+        even = min(max((goal_seconds or duration_total / max(len(storyboard), 1)), 1.6), 10.0)
+        for sentence in sentences:
+            sentence["duration"] = even
+
+    cursor = 0.0
+    for sentence in sentences:
+        sentence["start"] = round(cursor, 2)
+        sentence["end"] = round(cursor + sentence["duration"], 2)
+        cursor += sentence["duration"]
+    total = round(cursor, 2)
+
+    # 1.5) 镜头分配：每 3 秒左右一个镜头，一句长文案拆几个空镜，画面不干等
+    shots_needed = sum(max(1, round(sentence["duration"] / 3.0)) for sentence in sentences)
+    clips = pick_clips(source, shots_needed)
+    plan: list[dict] = []
+    clip_index = 0
+    for sentence in sentences:
+        count = max(1, round(sentence["duration"] / 3.0))
+        span = sentence["duration"] / count
+        for piece in range(count):
+            clip_start, clip_end = clips[clip_index % len(clips)]
+            clip_index += 1
+            clip_len = clip_end - clip_start
+            plan.append({
+                "start": round(sentence["start"] + piece * span, 2),
+                "end": round(sentence["start"] + (piece + 1) * span, 2),
+                "clip": (clip_start, clip_end),
+                "slow": clip_len / span if span else 1.0,
+                # 字幕/角标只在句首那个镜头开始前挂，避免每段重复写 drawtext
+                "sentence": sentence if piece == 0 else None,
+            })
+
+    # 2) 拼滤镜：截段 → 变速 → Ken Burns → 接力，再叠字幕角标
+    inputs = ["-i", str(source)]
+    if want_voice:
+        for sentence in sentences:
+            inputs += ["-i", str(sentence["speech"])]
+
+    video_parts = []
+    for index, item in enumerate(plan):
+        chain = _zoom_filter(item, index, fps, canvas) if kenburns else (
+            f"trim=start={item['clip'][0]:.2f}:end={item['clip'][1]:.2f},"
+            f"setpts=(PTS-STARTPTS)/{item['slow']:.4f},fps={fps},"
+            f"scale={canvas[0]}:{canvas[1]},eq=brightness=0.02:saturation=1.10:contrast=1.04,setsar=1"
+        )
+        video_parts.append(f"[0:v]{chain}[v{index}]")
+    concat_in = "".join(f"[v{i}]" for i in range(len(plan)))
+    video_parts.append(f"{concat_in}concat=n={len(plan)}:v=1:a=0[base]")
+
+    overlays = []
+    for index, sentence in enumerate(sentences):
+        overlays.append(_caption_drawtext(index, sentence["text"], sentence["start"], sentence["end"], font))
+        label = sentence["label"]
+        if label.get("title"):
+            overlays.extend(_label_drawtexts(index, label["title"], label.get("sub", ""), sentence["start"], sentence["end"], font))
+    video_parts.append("[base]" + ",".join(overlays) + "[vout]")
+
+    # 3) 声音：按 audio_mode 决定原声与口播的去留
+    audio_parts: list[str] = []
+    if audio_mode == "original":
+        # 素材原声经常比画面短，apad 补静音到片长，别让 -shortest 把画面截了
+        audio_parts.append(
+            f"[0:a]atrim=0:{total},apad=whole_dur={total},aresample=48000[aout]"
+        )
+    elif audio_mode == "mute":
+        audio_parts.append(f"anullsrc=channel_layout=stereo:sample_rate=48000,atrim=0:{total}[aout]")
+    elif audio_mode == "voice":
+        mix_labels = []
+        for index, sentence in enumerate(sentences):
+            delay_ms = int(sentence["start"] * 1000)
+            audio_parts.append(
+                f"[{index + 1}:a]aresample=48000,aformat=channel_layouts=stereo,"
+                f"adelay={delay_ms}|{delay_ms}[s{index}]"
+            )
+            mix_labels.append(f"[s{index}]")
+        audio_parts.append(
+            "".join(mix_labels) + f"amix=inputs={len(mix_labels)}:normalize=0:duration=longest,"
+            f"atrim=0:{total},asetpts=PTS-STARTPTS[aout]"
+        )
+    else:  # mix
+        # 素材原声常常比成片短（口播把片子拉长了），mix 必须按最长算，
+        # 再收口到总长：原声放完了剩下的时间留给口播，不能把口播切掉。
+        audio_parts = [f"[0:a]atrim=0:{total},volume={bgm_volume},aresample=48000[bgm]"]
+        mix_labels = ["[bgm]"]
+        for index, sentence in enumerate(sentences):
+            delay_ms = int(sentence["start"] * 1000)
+            audio_parts.append(
+                f"[{index + 1}:a]aresample=48000,aformat=channel_layouts=stereo,"
+                f"adelay={delay_ms}|{delay_ms}[s{index}]"
+            )
+            mix_labels.append(f"[s{index}]")
+        audio_parts.append(
+            "".join(mix_labels) + f"amix=inputs={len(mix_labels)}:normalize=0:duration=longest,"
+            f"atrim=0:{total},asetpts=PTS-STARTPTS[aout]"
+        )
+
+    filter_complex = ";".join(video_parts + audio_parts)
+
+    out_path = Path(_windows_path(out_path))
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-nostats",
+        *inputs,
+        "-filter_complex", filter_complex,
+        "-map", "[vout]", "-map", "[aout]",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "160k",
+        "-t", f"{total}",
+        "-shortest",     # 音轨比画面长时按画面收口，避免片尾留黑屏
+        str(out_path),
+    ]
+    import os
+    env = {**os.environ, **_fontconfig_env()}
+    completed = subprocess.run(command, capture_output=True, text=True, check=False, env=env)
+    if completed.returncode != 0:
+        detail = completed.stderr.strip()
+        raise RenderError("渲染失败：" + (detail[:900] or "未知错误"))
+    return out_path
+
+
+# ------------------------------------------------------------------ 后台任务
+
+# 渲染任务状态（进程内）。渲染一条 30 秒片子约 1~2 分钟，
+# 前端提交后轮询这里的 status。
+RENDER_JOBS: dict[str, dict] = {}
+
+
+def start_render_job(payload: dict) -> dict:
+    """提交一条风格成片渲染，立即返回 render_id。payload 字段：
+
+    template_id  必填，用哪个模板
+    source       必填，素材视频路径（相对项目或绝对路径）
+    storyboard   可选，直接给文案（[{text, label}]）；不给就按模板+facts 生成
+    facts        可选，房源字段（area/partition/rent...），API 文案优先、规则兜底
+    audio_mode   mix / original / voice / mute，默认 mix
+    bgm_volume   原声音量，默认 0.30
+    tts_voice / tts_rate  音色与语速
+    kenburns     是否推拉运镜，默认开
+    """
+    import threading
+    import uuid
+
+    from .copywriting import generate_storyboard
+
+    template_id = str(payload.get("template_id") or "").strip()
+    source = str(payload.get("source") or "").strip()
+    if not template_id:
+        raise RenderError("请指定 template_id")
+    if not source:
+        raise RenderError("请指定素材路径 source")
+    audio_mode = str(payload.get("audio_mode") or "mix").strip().lower()
+    if audio_mode not in AUDIO_MODES:
+        raise RenderError(f"audio_mode 只能是 {'/'.join(sorted(AUDIO_MODES))}")
+
+    render_id = uuid.uuid4().hex[:12]
+    job: dict = {
+        "id": render_id,
+        "template_id": template_id,
+        "status": "pending",
+        "audio_mode": audio_mode,
+        "output": "",
+        "error": "",
+        "created_at": utc_now(),
+    }
+    RENDER_JOBS[render_id] = job
+
+    def run() -> None:
+        try:
+            from .db import connect
+
+            job["status"] = "copywriting"
+            with connect() as connection:
+                row = connection.execute(
+                    "SELECT spec_json FROM style_templates WHERE id=?", (template_id,)
+                ).fetchone()
+            if row is None:
+                raise RenderError("模板不存在")
+            spec = json.loads(row["spec_json"] or "{}")
+
+            storyboard = payload.get("storyboard")
+            if not storyboard:
+                board, origin = generate_storyboard(spec, payload.get("facts") or {})
+                job["copy_origin"] = origin
+                storyboard = board
+
+            job["status"] = "rendering"
+            source_path = Path(_windows_path(source))
+            if not source_path.is_absolute():
+                source_path = BASE_DIR / source_path
+            out = DATA_OUT_DIR / f"style-{render_id}.mp4"
+            render_storyboard(
+                storyboard,
+                source_path,
+                out,
+                bgm_volume=float(payload.get("bgm_volume") or 0.30),
+                audio_mode=audio_mode,
+                tts_voice=str(payload.get("tts_voice") or TTS_VOICE),
+                tts_rate=str(payload.get("tts_rate") or TTS_RATE),
+                kenburns=bool(payload.get("kenburns", True)),
+            )
+            job["status"] = "done"
+            job["output"] = str(out)
+        except Exception as error:  # noqa: BLE001 - 后台线程必须把失败写回状态
+            job["status"] = "failed"
+            job["error"] = str(error)[:500]
+
+    threading.Thread(target=run, daemon=True).start()
+    return job
+
+
+DATA_OUT_DIR = BASE_DIR / "data" / "renders"
+
+
+# ------------------------------------------------------------------ 任务本地出片
+
+# 任务 voice 选项 → edge-tts 音色
+_VOICE_MAP = {
+    "female_warm": ("zh-CN-XiaoxiaoNeural", "+10%"),
+    "female_professional": ("zh-CN-XiaoxiaoNeural", "+4%"),
+    "male_professional": ("zh-CN-YunjianNeural", "+6%"),
+}
+
+
+def _script_to_storyboard(script: str) -> list[dict]:
+    """把任务口播稿拆成一镜一句。
+
+    先按换行，再按句号问号切；单句太长（超过 24 字）再按逗号拆成两半，
+    否则一屏字幕塞不下、画面也会一个镜头干等十几秒。
+    """
+    lines = [line.strip(" 　") for line in (script or "").splitlines()]
+    if sum(1 for line in lines if line) < 2:
+        pieces = re.split(r"[。！？!?\n]+", script or "")
+        lines = [piece for piece in pieces if piece.strip()]
+
+    storyboard: list[dict] = []
+    for line in lines:
+        text = line.strip(" 　，,")
+        if not text:
+            continue
+        if len(text) <= 24:
+            storyboard.append({"text": text})
+            continue
+        # 长句按逗号切成接近等长的两块，优先在中间附近断
+        parts = [part for part in re.split(r"[，,；;]", text) if part.strip()]
+        buffer = ""
+        for part in parts:
+            if buffer and len(buffer) + len(part) > 20:
+                storyboard.append({"text": buffer})
+                buffer = part
+            else:
+                buffer = f"{buffer}，{part}" if buffer else part
+        if buffer:
+            storyboard.append({"text": buffer})
+
+    if not storyboard:
+        raise RenderError("任务口播稿是空的，先在任务详情里生成文案")
+    return storyboard
+
+
+def render_task_locally(task_row) -> Path:
+    """不走视频工作台，直接在本机用 ffmpeg 出片。
+
+    给「工作台授权根目录都不在本机」的场景兜底：素材用任务原始视频，
+    口播用任务文案逐句 TTS，画面智能选镜 + Ken Burns，原声默认压低铺底。
+    """
+    from .db import EXPORT_DIR
+    from .hygiene import clean_internal_sentences
+
+    settings = get_settings()
+    script, _removed = clean_internal_sentences(task_row["script"])
+    storyboard = _script_to_storyboard(script)
+
+    source = Path(_windows_path(task_row["source_video_path"]))
+    if not source.is_file():
+        raise RenderError(f"任务原始视频不存在：{source}")
+
+    voice, rate = _VOICE_MAP.get(str(task_row["voice"] or ""), _VOICE_MAP["female_warm"])
+    audio_mode = str(settings.get("local_audio_mode") or "mix").strip().lower()
+    if audio_mode not in AUDIO_MODES:
+        audio_mode = "mix"
+    canvas = (CANVAS_WIDE_W, CANVAS_WIDE_H) if task_row["aspect_ratio"] == "16:9" else (CANVAS_W, CANVAS_H)
+
+    out_dir = EXPORT_DIR / str(task_row["task_no"])
+    out = out_dir / "local.mp4"
+    # target_duration = 0 表示「根据原素材」：用素材视频流的真实长度当目标
+    goal = float(task_row["target_duration"] or 0)
+    if goal <= 0:
+        try:
+            goal = video_duration(source)
+        except RenderError:
+            goal = 0.0
+    started = time.time()
+    render_storyboard(
+        storyboard,
+        source,
+        out,
+        audio_mode=audio_mode,
+        tts_voice=voice,
+        tts_rate=rate,
+        canvas=canvas,
+        goal_seconds=goal or None,
+    )
+    logger.info("本地出片完成：%s（%.1fs）", out, time.time() - started)
+
+    # 用户自己设定的出品目录：成片再复制一份过去，方便直接取用
+    export_root = str(settings.get("export_output_root") or "").strip()
+    if export_root:
+        target_dir = Path(export_root)
+        if not target_dir.is_absolute():
+            target_dir = (BASE_DIR / target_dir).resolve()
+        target_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(out, target_dir / f"{task_row['task_no']}.mp4")
+        logger.info("成片已复制到出品目录：%s", target_dir)
+    return out

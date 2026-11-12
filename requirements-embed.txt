@@ -1,0 +1,31 @@
+# 语义检索（本地 embeddinggemma-2）额外依赖 —— 不属于项目原始 requirements.txt
+#
+# 用途：app/semantic.py 的 provider=local 分支在本进程内跑模型，
+#       工作台在另一台机器上时也能做房源语义搜索。
+#
+# 注意：torch 的 CUDA 版不在 PyPI，需要从镜像装指定 wheel：
+#   https://mirror.sjtu.edu.cn/pytorch-wheels/cu130/
+#     torch-2.14.1+cu130-cp312-cp312-win_amd64.whl
+#     torchvision-0.29.1+cu130-cp312-cp312-win_amd64.whl
+# CPU 机器可退化为 PyPI 的 torch（fp32 也能跑，只是慢约 5 倍）。
+#
+# 模型权重：models/embeddinggemma-2（来自 ModelScope google/embeddinggemma-2，约 1.5GB）
+
+torch==2.14.1+cu130
+torchvision==0.29.1+cu130
+sentence-transformers>=6.2,<7
+transformers>=5.22,<6
+pillow>=11
+huggingface_hub>=2,<3
+
+# 参考视频拆解（口播转写 + 画面字幕识别）—— app/asr.py
+#
+# faster-whisper 走 ctranslate2，需要 PyAV 之外的解码；本项目直接用 ffmpeg 解码，
+# 所以这里的 av 只作为依赖存在，不需要额外配 CUDA 12 的 cuBLAS：
+# 显卡不可用时会自动退回 CPU int8（34 秒的片子约 8 秒转完）。
+#
+# 模型权重：models/faster-whisper-large-v3-turbo（ModelScope，约 1.5GB）
+#   .venv\Scripts\python.exe tools\fetch_asr_model.py
+faster-whisper>=1.2,<2
+rapidocr_onnxruntime>=1.4
+opencv-python-headless>=4.10

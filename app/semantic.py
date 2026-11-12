@@ -1,11 +1,13 @@
 import asyncio
 import hashlib
 import json
+import logging
 import math
 import os
 import re
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 import httpx
@@ -14,6 +16,57 @@ from .db import DATA_DIR, json_dumps, transaction, utc_now
 from .services import public_property, safe_public_text
 
 QUERY_CACHE: dict[tuple[str, str], list[float]] = {}
+logger = logging.getLogger(__name__)
+
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+_LOCAL_MODEL_LOCK = threading.Lock()
+_LOCAL_MODELS: dict[str, object] = {}
+
+
+def _local_model_dir(config: dict[str, str]) -> Path:
+    """本地模型目录：优先 SEMANTIC_MODEL_DIR，否则 models/<模型名>。"""
+    raw = config["model_dir"] or str(BASE_DIR / "models" / (config["model"] or "embeddinggemma-2"))
+    path = Path(raw)
+    return path if path.is_absolute() else (BASE_DIR / path).resolve()
+
+
+def _embed_local(texts: list[str]) -> list[list[float]]:
+    """进程内直接跑本地向量模型（sentence-transformers）。
+
+    和 workbench_cli 的区别：不依赖工作台上的私有 videopipe 包，
+    所以工作台在另一台机器上时也能用。只加载文本能力，省显存和内存。
+    """
+    config = semantic_config()
+    model_dir = _local_model_dir(config)
+    if not (model_dir / "config.json").is_file():
+        raise RuntimeError(f"本地向量模型目录不完整：{model_dir}")
+    key = str(model_dir)
+    with _LOCAL_MODEL_LOCK:
+        model = _LOCAL_MODELS.get(key)
+        if model is None:
+            import torch
+            from sentence_transformers import SentenceTransformer
+
+            use_cuda = torch.cuda.is_available()
+            model = SentenceTransformer(
+                key,
+                device="cuda" if use_cuda else "cpu",
+                config_kwargs={"vision_config": None, "audio_config": None},
+                # 有显卡用 fp16（3060 上快一个数量级）；CPU 上 bf16 比 fp32 慢约 6 倍
+                model_kwargs={"dtype": torch.float16 if use_cuda else torch.float32},
+            )
+            _LOCAL_MODELS[key] = model
+            logger.info("本地向量模型已加载：%s（device=%s）", key, "cuda" if use_cuda else "cpu")
+    batch_size = 32 if model.device.type == "cuda" else 16
+    vectors = model.encode(
+        texts,
+        prompt_name="SearchQuery",
+        batch_size=batch_size,
+        normalize_embeddings=True,
+        show_progress_bar=False,
+    )
+    return [vector.tolist() for vector in vectors]
 
 
 def semantic_config() -> dict[str, str]:
@@ -41,6 +94,9 @@ def is_configured() -> bool:
             and config["model_dir"]
             and Path(config["model_dir"]).is_dir()
         )
+    if config["provider"] == "local":
+        model_dir = _local_model_dir(config)
+        return bool(config["model"] and model_dir.is_dir() and (model_dir / "config.json").is_file())
     return bool(config["base_url"] and config["model"])
 
 
@@ -125,6 +181,8 @@ async def embed_texts(texts: list[str]) -> list[list[float]]:
         return []
     if config["provider"] == "workbench_cli":
         return await asyncio.to_thread(_embed_with_workbench_cli, texts)
+    if config["provider"] == "local":
+        return await asyncio.to_thread(_embed_local, texts)
     if not config["base_url"] or not config["model"]:
         raise RuntimeError("本地向量模型尚未配置")
     headers = {"Content-Type": "application/json"}

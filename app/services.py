@@ -60,55 +60,277 @@ def _spoken_orientation(raw: str) -> str:
     return text
 
 
+def _cn_number(value: int) -> str:
+    """11 → 十一，22 → 二十二（口播念数字比念阿拉伯数字自然）。"""
+    digits = "零一二三四五六七八九"
+    if value < 0:
+        return str(value)
+    if value < 10:
+        return digits[value]
+    if value < 20:
+        return "十" + (digits[value % 10] if value % 10 else "")
+    if value < 100:
+        tens, ones = divmod(value, 10)
+        return digits[tens] + "十" + (digits[ones] if ones else "")
+    return str(value)
+
+
+def _partition_count(raw: str) -> int:
+    """「3隔」「5隔间」「三个房间」都数成整数，数不出来算 0。
+
+    表里这一列经常被填成面积（见过「2600平」），直接念会变成
+    「隔了2600个房间」，所以带面积单位的一律当脏数据丢掉。
+    """
+    text = (raw or "").strip()
+    if not text or re.search(r"平|㎡|m²|m2", text):
+        return 0
+    match = re.search(r"(\d+)", text)
+    if match:
+        count = int(match.group(1))
+    else:
+        match = re.search(r"[两二三四五六七八九]", text)
+        if not match:
+            return 0
+        count = 2 if match.group(0) == "两" else "零一二三四五六七八九".index(match.group(0))
+    return count if 0 < count <= 30 else 0
+
+
+def _workstation_span(sqm: float) -> tuple[int, int]:
+    """按行业经验把面积折成工位数：宽裕 10.5 平/位，紧凑 7.5 平/位。"""
+    tight = max(1, int(round(sqm / 7.5)))
+    loose = max(1, int(round(sqm / 10.5)))
+    return min(loose, tight), max(loose, tight)
+
+
+def _desk_phrase(sqm: float) -> str:
+    """工位数说成人话：小数报区间，大数只报量级。"""
+    low, high = _workstation_span(sqm)
+    if high <= 30:
+        return f"{_cn_number(low)}个到{_cn_number(high)}个之间"
+    if high <= 100:
+        mid = int(round((low + high) / 2 / 5) * 5)
+        return f"{_cn_number(mid)}个上下"
+    if high <= 300:
+        return "两百多个"
+    return "三百个以上"
+
+
+# 每句 10-20 字：出片时一句配一个镜头、一句一条字幕，太长字幕塞不下、
+# 太短镜头切得人晕。句号收尾，渲染器按句号切分镜。
+def _fit_audience(sqm: float) -> list[str]:
+    if sqm >= 600:
+        return ["这个面积一般是整层用，总部或者几个部门一起搬进来都放得下。"]
+    if sqm >= 300:
+        return ["三百多平往上，部门分区不用挤，老板间也能单独留出来。"]
+    if sqm >= 150:
+        return ["二十到三十人的公司正合适，前台、工区、会议室都分得出来。"]
+    if sqm >= 80:
+        return ["十几个人的团队，坐得开，又不至于空得慌。"]
+    if sqm > 0:
+        return ["小团队先把摊子支起来够用，或者拿来做工作室。"]
+    return []
+
+
+def _partition_lines(count: int) -> list[str]:
+    if count <= 0:
+        return []
+    if count == 1:
+        return ["一个大开间，中间没切，怎么分你自己定。"]
+    if count == 2:
+        return ["隔了两个房间，老板间和会议室各占一间，刚好。"]
+    if count <= 4:
+        return [f"隔了{_cn_number(count)}个房间，老板一间、财务一间、开会一间，正好分完。"]
+    return [f"隔了{_cn_number(count)}个房间，团队怎么分都能落下。"]
+
+
+def _orientation_lines(text: str) -> list[str]:
+    if not text:
+        return []
+    if "四面" in text or "多面" in text:
+        return ["四面采光，白天基本不用开灯，这是一套房里最值钱的地方。"]
+    if "双面" in text:
+        return ["双面采光，风从两边过，屋里不闷。"]
+    if "南" in text:
+        return ["朝南，上午十点往后光就进来了，下午两三点最亮。"]
+    if "北" in text:
+        return ["朝北，光线柔和不刺眼，盯一天屏幕也不累。"]
+    if "东" in text:
+        return ["朝东，早上光最好，一天从亮堂开始。"]
+    if "西" in text:
+        return ["朝西，下午采光足，加班到晚上也不闷。"]
+    if "边" in text:
+        return ["边套，采光面比中间户多，白天基本不用开灯。"]
+    if "整层" in text:
+        return ["整层独立，电梯门一开就是自己家，私密性好。"]
+    return []
+
+
+def _furnishing_lines(text: str) -> list[str]:
+    """只认明确的装修/家具说法，读不懂的（比如被填成「产权面积」）宁可不念。"""
+    if not text:
+        return []
+    if re.search(r"带全套|全套家具|家具齐|家私齐|拎包", text):
+        return ["全套家具留着，桌椅一摆就能开工，这一块不用再花钱。"]
+    if re.search(r"带家具|家私|有家具|带办公", text):
+        return ["家具都留着，桌椅一摆就能开工，这一块不用再花钱。"]
+    if re.search(r"毛坯|清水|空房", text):
+        return ["现在是毛坯，装修你自己做主，想怎么改都行。"]
+    if re.search(r"精装", text):
+        return ["精装交付，不用再折腾装修，进来就能用。"]
+    if re.search(r"阳台", text):
+        return ["还带个阳台，想透口气不用下楼。"]
+    if re.search(r"展厅", text):
+        return ["之前是做展厅用的，开间大，改回办公也好改。"]
+    return []
+
+
+def _area_line(sqm: float, area_text: str) -> str:
+    """面积句按量级换说法，避免每套房子都用同一句话开场。"""
+    size = area_text or f"{_cn_number(int(round(sqm)))}平"
+    if sqm >= 600:
+        return f"{size}，整层量级，得按部门来规划。"
+    if sqm >= 300:
+        return f"{size}，这个面积能把分区做完整了。"
+    if sqm >= 100:
+        return f"{size}，标准办公面积，工位和房间都摆得开。"
+    return f"{size}，小面积，实用为主，一寸都不浪费。"
+
+
+def _judgment_lines(sqm: float) -> list[str]:
+    """一句主观判断——中介带看时最常说的那种话，不涉及任何未证事实。"""
+    if sqm >= 600:
+        return ["说实话，整层这种盘不常有，碰到合适的别拖。"]
+    if sqm >= 300:
+        return ["这个面积段看房的老板最多，看着大、用着别扭的不少，这套算规矩的。"]
+    if sqm >= 150:
+        return ["二三十人的公司挑房子最难受，这套的尺寸刚好卡在舒服的位置。"]
+    if sqm >= 80:
+        return ["这个面积段最能看出性价比，差一点点，用起来差很多。"]
+    if sqm > 0:
+        return ["小面积好租也好转手，刚起步的公司拿这种最稳。"]
+    return []
+
+
 def generate_script(property_row, target_duration: int = 45) -> tuple[str, list[str]]:
     """生成能直接发出去的口播稿。
 
     这段文字会被视频工作台当文案，既做配音也做字幕，所以必须是**对外能看**的话：
     内部提醒只进 warnings，绝不写进 script；字段没把握的地方宁可不提，也不能编。
+
+    写法律：房源字段能说什么就说什么；字段没写的，用「面积→工位」「隔间数→
+    各自用途」这类行业经验换算补出体感（这是人会讲的话），但绝不断言现场细节
+    （有没有柱子、什么地板、窗外是什么），那些交给「带你走一圈」。
     """
     settings = get_settings()
     region = safe_public_text(property_row["region_norm"], 30)
     building = safe_public_text(property_row["building_norm"], 30)
+    room = safe_public_text(property_row["room_norm"], 20)
     area = safe_public_text(property_row["area_raw"], 20)
     partition = _spoken_partition(safe_public_text(property_row["partition_raw"], 20))
     orientation = _spoken_orientation(safe_public_text(property_row["orientation_raw"], 30))
     furnishing = safe_public_text(property_row["furnishing_layout_raw"], 60)
 
+    raw_sqm = property_row["area_sqm"]
+    sqm = float(raw_sqm) if raw_sqm else 0.0
+    if not sqm and area:
+        match = re.search(r"\d+(?:\.\d+)?", area)
+        sqm = float(match.group(0)) if match else 0.0
+
     location = "、".join(part for part in (region, building) if part)
-    opening = (
-        f"正在找办公室的朋友看过来，今天带你看一套位于{location}的房源。"
-        if location else "正在找办公室的朋友看过来，今天带你看一套新上的房源。"
-    )
+    # 同一套房源每次出片句式稳定（方便复用一条片子的话术），不同房源各不相同
+    seed = "|".join((property_row["match_key"] or "", region, building, room))
+    rng = random.Random(seed)
 
-    # 按重要性排序，超长就从末尾砍（价格类信息一律不写进来）
-    clauses = []
-    if area:
-        clauses.append(f"{area}")
-    if partition:
-        # 「3个隔间」直接说数字，像「店面」「展厅」这种要补个说法，否则读着突兀
-        clauses.append(partition if re.fullmatch(r"\d+个隔间", partition) else f"户型是{partition}")
-    if orientation:
-        # 这一列不全是方位：还有「边套」「整层」，套「朝」字就说不通了
-        clauses.append(f"朝{orientation}" if re.search(r"[东南西北]", orientation) else orientation)
-    if furnishing:
-        # 这一列混着「带家具」和「展厅」两种写法，纯名词补个「格局」才读得通
-        clauses.append(furnishing if re.search(r"带|精装|简装|毛坯|家私|家具", furnishing) else f"{furnishing}格局")
-
-    contact = (settings.get("public_contact") or "欢迎私信咨询房源详情和看房安排").strip()
-    ending = f"{contact}。"
-
-    # 中文口播约每秒 4 字，目标时长决定能说多少，避免配音被硬切或字幕溢出
-    budget = max(60, int(max(10, target_duration) * 4.2))
-    while len(clauses) > 1 and len(opening) + len("，".join(clauses)) + len(ending) > budget:
-        clauses.pop()
-
-    if clauses:
-        body = f"这套{'，'.join(clauses)}。"
+    blocks: list[tuple[str, list[str]]] = []
+    # ---- 开场：有面积就用面积抛钩子，没有就说实话 ----
+    if sqm:
+        blocks.append(("hook", [rng.choice([
+            f"{_cn_number(int(round(sqm)))}平的办公室，带你看一遍，看完再说值不值。",
+            f"今天这套{_cn_number(int(round(sqm)))}平，先别急着划走，看完再说。",
+            f"找房子的老板，{_cn_number(int(round(sqm)))}平这一套，值得你看完。",
+        ])]))
     else:
-        body = "具体面积和格局，可以私信我详细说。"
-    script = opening + body + ending
+        blocks.append(("hook", [rng.choice([
+            "今天带你看一套新上的办公室，看完再决定。",
+            "正在找办公室的老板，这一套先看完再划走。",
+        ])]))
+
+    # ---- 位置 ----
+    where = "".join(part for part in (region, building) if part)
+    if where and room:
+        blocks.append(("location", [f"位置在{where}，{room}。"]))
+    elif where:
+        blocks.append(("location", [f"位置在{where}，具体几楼我发你。"]))
+    elif room:
+        blocks.append(("location", [f"房号{room}，位置我带你看。"]))
+
+    # ---- 面积 + 工位体感 ----
+    if sqm:
+        blocks.append(("area", [_area_line(sqm, area)]))
+        blocks.append(("desk", [f"工位摆下来，{_desk_phrase(sqm)}，看你留多少过道。"]))
+        blocks.append(("desk2", [rng.choice([
+            "这个尺寸，团队扩到明年也不用急着搬。",
+            "工位之间留得开，坐着不憋。",
+            "摆完工位还剩得出走道，不挤。",
+        ])]))
+
+    # ---- 格局 / 朝向 / 家具 ----
+    count = _partition_count(partition)
+    if count:
+        blocks.append(("partition", _partition_lines(count)))
+    if orientation:
+        blocks.append(("orientation", _orientation_lines(orientation)))
+    if furnishing:
+        blocks.append(("furnishing", _furnishing_lines(furnishing)))
+
+    # ---- 适合谁 + 一句主观判断（人味主要来自这里）----
+    blocks.append(("fit", _fit_audience(sqm)))
+    blocks.append(("judgment", _judgment_lines(sqm)))
+
+    # ---- 带看邀约：现场细节不编，交给「走一圈」----
+    blocks.append(("look", [rng.choice([
+        "视频里只能看个大概，现场走一圈感受完全不一样。",
+        "等下来了我从门口带你走一圈，动线你一看就明白。",
+        "光看画面体会不到空间感，实地站一下最准。",
+    ])]))
+
+    # ---- 收尾 + 互动 ----
+    contact = (settings.get("public_contact") or "欢迎私信咨询房源详情和看房安排").strip()
+    blocks.append(("cta", [f"{contact}。"]))
+    blocks.append(("engage", [rng.choice([
+        "想看的老板评论区扣个 1，我把详细资料发你。",
+        "有意的直接私信我，随时可以约看。",
+        "拿不准的也可以问我，我按你的需求帮你挑。",
+    ])]))
+
+    # ---- 按目标时长裁剪：中文口播约每秒 4.2 字 ----
+    budget = max(70, int(max(10, target_duration) * 4.2))
+    lines: list[str] = []
+    used = 0
+    for name, candidates in blocks:
+        for sentence in candidates:
+            if not sentence:
+                continue
+            # 开场、收尾、互动必须留着——没有这三句就不像人说的话了
+            mandatory = name in {"hook", "cta", "engage"}
+            if not mandatory and used + len(sentence) > budget:
+                continue
+            lines.append(sentence)
+            used += len(sentence)
+
+    if not lines:
+        lines = ["正在找办公室的朋友看过来，今天带你看一套新上的房源。"]
+
+    script = "".join(lines)
 
     warnings = ["这是基于房源字段生成的口播稿，未经视频画面核验，出片前请过一遍。"]
+    missing = [label for label, value in (
+        ("朝向", orientation), ("家具情况", furnishing),
+    ) if not value]
+    if missing:
+        warnings.append(f"房源表里{'、'.join(missing)}是空的，文案已用通用说法兜住；补上这几列，稿子会更具体。")
+    if sqm:
+        warnings.append("工位数是按行业经验（约 7.5–10.5 平/工位）估算的，跟实际摆法会有出入。")
     if property_row["rent_raw"]:
         warnings.append("草稿没有播报租金。要在视频里报价，先把租金口径确认清楚再手动加。")
     if property_row["status"] == "needs_review":
@@ -133,9 +355,19 @@ def create_task_record(
     source: str = "webui",
     notify_chat_id: str = "",
     task_no: str = "",
+    script_override: str = "",
 ) -> str:
-    """WebUI 与飞书共用的唯一建任务入口，避免两个入口各写一套状态机。"""
-    script, warnings = generate_script(property_row, target_duration)
+    """WebUI 与飞书共用的唯一建任务入口，避免两个入口各写一套状态机。
+
+    script_override 不为空时表示用户自己写了文案（或让 AI 写好再改过），
+    直接用它，不再按字段重新生成。
+    """
+    custom = (script_override or "").strip()
+    if custom:
+        script = custom if custom.endswith(("。", "！", "？", ".", "!", "?")) else custom + "。"
+        warnings = ["用了你自己提供的文案，系统没有按房源字段核对，出片前请确认没有写错的信息。"]
+    else:
+        script, warnings = generate_script(property_row, target_duration)
     task_id = str(uuid.uuid4())
     now = utc_now()
     with transaction() as connection:

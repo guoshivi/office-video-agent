@@ -280,7 +280,7 @@ async function loadDashboard() {
       <div class="task-row" data-task="${task.id}" role="button" tabindex="0">
         <span class="number">${escapeHtml(task.task_no)}</span>
         <div><strong>${escapeHtml(task.property_label || "未命名房源")}</strong><small>${escapeHtml(task.original_filename)}</small></div>
-        <span>${escapeHtml(task.aspect_ratio)} · ${task.target_duration} 秒</span>
+        <span>${escapeHtml(task.aspect_ratio)} · ${Number(task.target_duration) > 0 ? task.target_duration + " 秒" : "根据原素材"}</span>
         ${statusPill(task.status)}
       </div>`).join("")
     : `<div class="empty"><strong>还没有视频任务</strong>导入房源并上传第一段实拍视频，即可开始。</div>`;
@@ -343,7 +343,7 @@ async function loadTasks() {
         <td><strong class="mono">${escapeHtml(task.task_no)}</strong></td>
         <td><strong>${escapeHtml(task.property_label)}</strong><small>${escapeHtml(task.area || "面积待补充")}</small></td>
         <td>${escapeHtml(task.original_filename)}<small>${escapeHtml(SOURCE_LABEL[task.source] || task.source)}</small></td>
-        <td>${escapeHtml(task.aspect_ratio)} · ${task.target_duration} 秒</td>
+        <td>${escapeHtml(task.aspect_ratio)} · ${Number(task.target_duration) > 0 ? task.target_duration + " 秒" : "根据原素材"}</td>
         <td>${statusPill(task.status)}${task.status === "processing" ? `<small>${escapeHtml(task.stage || "处理中")} · ${task.progress}%</small>` : task.output_video_path ? "<small>成片已就绪</small>" : ""}</td>
         <td>${formatDate(task.created_at)}</td>
         <td><button class="text-button" data-task="${task.id}">查看</button></td>
@@ -670,7 +670,8 @@ async function loadSettings() {
     if (form.elements[key]) form.elements[key].value = value;
   });
   if (form.elements.default_duration) {
-    $("#task-form").elements.target_duration.value = settings.default_duration;
+    // 默认时长设为 0 表示「默认根据原素材」：选完视频会自动开启跟原片模式
+    $("#task-form").elements.target_duration.value = Number(settings.default_duration) > 0 ? settings.default_duration : 45;
     $("#task-form").elements.aspect_ratio.value = settings.default_aspect_ratio;
     $("#task-form").elements.voice.value = settings.default_voice;
   }
@@ -688,6 +689,14 @@ async function loadSettings() {
   renderFeishu(feishu);
   renderBitable(bitable);
   loadSemanticStatus().catch(() => {});
+  api("/api/copy/status")
+    .then((copy) => {
+      const hint = $("#copy-model-hint");
+      if (hint) hint.textContent = copy.ready ? `${copy.label} · ${copy.model}` : "未配置 AI，走规则版";
+      const button = $("#btn-ai-copy");
+      if (button) button.title = copy.ready ? "" : "去系统设置里选服务商并填 API Key";
+    })
+    .catch(() => {});
 }
 
 function renderBitable(bitable) {
@@ -1106,12 +1115,80 @@ $("#import-form").addEventListener("submit", async (event) => {
   finally { busy(form, false); }
 });
 
+// ---------------------------------------------------------------- AI 文案
+
+function copyDurationValue() {
+  const raw = Number(durationInput().value);
+  if (Number.isFinite(raw) && raw > 0) return Math.round(raw);
+  // 跟原片模式下用素材真实长度，还没选视频就按 45 秒估
+  if (sourceSeconds) return Math.round(clampDuration(sourceSeconds));
+  return 45;
+}
+
+async function generateCopy() {
+  const propertyId = $("#task-property").value;
+  if (!propertyId) {
+    toast("先选关联房源，AI 才知道写哪一套", true);
+    return;
+  }
+  const button = $("#btn-ai-copy");
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = "生成中…";
+  try {
+    const result = await api("/api/copy/generate", {
+      method: "POST",
+      body: JSON.stringify({ property_id: propertyId, target_duration: copyDurationValue() }),
+    });
+    $("#task-script").value = result.script || "";
+    toast(result.message || "已生成文案");
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
+  }
+}
+
+async function polishCopy() {
+  const text = $("#task-script").value.trim();
+  if (text.length < 10) {
+    toast("先写几句，或点「AI 生成」拿到一版再润色", true);
+    return;
+  }
+  const button = $("#btn-polish-copy");
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = "润色中…";
+  try {
+    const result = await api("/api/copy/polish", {
+      method: "POST",
+      body: JSON.stringify({ property_id: $("#task-property").value || "", script: text }),
+    });
+    $("#task-script").value = result.script || text;
+    toast("润色完成，可继续手改");
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
+  }
+}
+
+$("#btn-ai-copy")?.addEventListener("click", generateCopy);
+$("#btn-polish-copy")?.addEventListener("click", polishCopy);
+
 $("#task-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
   busy(form, true, "正在上传…");
   try {
-    const task = await api("/api/tasks", { method: "POST", body: new FormData(form) });
+    const payload = new FormData(form);
+    // 「跟原片」模式开启 → 提交 0，后端按素材真实长度出片
+    if (durationButton().classList.contains("on")) {
+      payload.set("target_duration", "0");
+    }
+    const task = await api("/api/tasks", { method: "POST", body: payload });
     closeDialog("task-dialog");
     form.reset();
     resetDurationField();
@@ -1368,14 +1445,19 @@ function resetDurationField() {
 
 function applySourceDuration() {
   if (!sourceSeconds) return;
-  const seconds = clampDuration(sourceSeconds);
-  durationInput().value = seconds;
-  autoFilledSeconds = seconds;
-  durationButton().classList.add("on");
-  if (seconds !== Math.round(sourceSeconds)) {
-    toast(`原片 ${Math.round(sourceSeconds)} 秒，超过上限，按 ${seconds} 秒出片`);
+  // 「跟原片」是模式开关：开启后提交 target_duration=0，
+  // 出片时由后端按素材的真实长度定，不受 180 秒上限截断
+  const follow = !durationButton().classList.contains("on");
+  if (follow) {
+    durationInput().value = Math.min(180, Math.max(10, Math.round(sourceSeconds)));
+    durationInput().placeholder = "根据原素材";
+    durationButton().classList.add("on");
+    autoFilledSeconds = Number(durationInput().value);
+    toast(`已开启「根据原素材」：按原片 ${Math.round(sourceSeconds)} 秒出片`);
   } else {
-    toast(`目标时长已设为原片长度 ${seconds} 秒`);
+    durationButton().classList.remove("on");
+    autoFilledSeconds = 0;
+    toast("已取消根据原素材，恢复手动时长");
   }
 }
 
@@ -1400,11 +1482,15 @@ $("#video-input").addEventListener("change", async (event) => {
   const seconds = await probeVideoDuration(file);
   renderDurationButton(seconds);
 
-  // 之前就是「跟原片」填的、且用户没动过 → 换了视频就跟着换
-  if (seconds && wasAuto && Number(durationInput().value) === wasAuto) {
+  // 设置里默认时长 = 0 → 新任务默认「根据原素材」，选完视频自动开启
+  const defaultFollowSource = Number(state.settings.default_duration) === 0;
+  if (seconds && (defaultFollowSource || (wasAuto && Number(durationInput().value) === wasAuto))) {
     durationInput().value = clampDuration(seconds);
     autoFilledSeconds = clampDuration(seconds);
     durationButton().classList.add("on");
+    if (defaultFollowSource) {
+      toast(`默认根据原素材出片：这段视频 ${Math.round(seconds)} 秒`);
+    }
     return;
   }
   // 目标比素材还长，说明做不到。直接按素材长度来，别让人设了 45 却出 25 秒。
