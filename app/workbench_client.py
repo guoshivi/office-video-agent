@@ -238,6 +238,12 @@ def _render_settings(task: dict, safe_mode: bool = False) -> dict:
         gap = float(settings.get("render_sentence_gap") or 0.22)
     except ValueError:
         gap = 0.22
+    # 语速：设置里存的是 "+10%" 这种百分比，工作台那边要倍率
+    rate = str(settings.get("render_tts_rate") or "").strip()
+    try:
+        speed = round(1 + float(rate.rstrip("%")) / 100, 2) if rate else 1.0
+    except ValueError:
+        speed = 1.0
     # target_duration=0 表示「根据原素材时长出片」：探测原始视频的真实长度
     target_seconds = int(task["target_duration"])
     if target_seconds <= 0:
@@ -252,21 +258,25 @@ def _render_settings(task: dict, safe_mode: bool = False) -> dict:
         "voice_engine": "qwen",
         "vox_voice": "natural_female",
         "subtitles": True,
-        "subtitle_size": 54,
-        # 380 是工作台界面自己的默认位置，之前写 360 会让字幕压得更低
-        "subtitle_bottom": 380,
+        "subtitle_size": {"small": 42, "medium": 54, "large": 66}.get(
+            str(settings.get("render_subtitle_size") or "medium"), 54,
+        ),
+        # 工作台自己的三档位置：靠上 560 / 居中 380 / 靠下 240
+        "subtitle_bottom": {"high": 560, "middle": 380, "low": 240}.get(
+            str(settings.get("render_subtitle_bottom") or "middle"), 380,
+        ),
         "subtitle_border": 3,
         "subtitle_style": "classic",
         # 让模型自己挑句子里该高亮的词，比固定规则更接近人工出的效果
-        "highlight_source": "ai",
-        "subtitle_highlight": True,
+        "highlight_source": str(settings.get("render_highlight_source") or "ai").strip() or "ai",
+        "subtitle_highlight": _flag(settings, "render_subtitle_highlight", "1"),
         "bgm": False,
         "bgm_path": "",
         "bgm_volume": 0.2,
         "voice_volume": 1.0,
         # 工作台默认 off；开 light 会为了躲平台判重去动画面，画质反而掉
         "dedup": "off",
-        "speed": 1.0,
+        "speed": speed,
         # 1 = 一个镜头只用一次；2 会让同一段画面重复出现，成片显廉价
         "shot_reuse": 1,
         # 下面这几个是三件套的开关。默认跟工作台界面一致（全开），
@@ -274,8 +284,8 @@ def _render_settings(task: dict, safe_mode: bool = False) -> dict:
         "sticker_enabled": False if safe_mode else _flag(settings, "render_sticker", "1"),
         "flower_enabled": False if safe_mode else _flag(settings, "render_flower", "1"),
         "sfx_enabled": False if safe_mode else _flag(settings, "render_sfx", "1"),
-        "flower_style": "auto",
-        "flower_density": "high",
+        "flower_style": str(settings.get("render_flower_style") or "auto").strip() or "auto",
+        "flower_density": str(settings.get("render_flower_density") or "high").strip() or "high",
         # 美颜和滤镜对房源实拍是减分项：墙面色偏了反而显得房子不对
         "beauty": False,
         "beauty_strength": 0.25,

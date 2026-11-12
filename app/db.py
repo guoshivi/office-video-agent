@@ -257,12 +257,24 @@ DEFAULT_SETTINGS = {
     # 本机花字由 Pillow 本地画（app/flower_text.py），不存在模型挑错资源的问题，默认开。
     "render_sticker": os.getenv("OVA_RENDER_STICKER", "0"),
     "render_flower": os.getenv("OVA_RENDER_FLOWER", "1"),
+    # 花字风格：auto=按短语哈希在常用样式里轮换；也可指定 flower_text.STYLES 里的名字
+    "render_flower_style": os.getenv("OVA_RENDER_FLOWER_STYLE", "auto"),
+    # 花字频率：low/normal/high = 整条最多 1/2/3 处
+    "render_flower_density": os.getenv("OVA_RENDER_FLOWER_DENSITY", "high"),
     "render_sfx": os.getenv("OVA_RENDER_SFX", "0"),
     "render_sentence_gap": os.getenv("OVA_RENDER_SENTENCE_GAP", "0.22"),
     # 本机引擎的 BGM：曲库在 data/render-env/music（本机合成，可商用）
     "render_bgm": os.getenv("OVA_RENDER_BGM", "1"),
     "render_bgm_mood": os.getenv("OVA_RENDER_BGM_MOOD", ""),   # 留空=按任务稳定随机
     "render_bgm_volume": os.getenv("OVA_RENDER_BGM_VOLUME", "0.14"),
+    # 字幕：大小 / 距底边 / 重点词上色 / 挑词来源（ai / rules / manual）
+    "render_subtitle_size": os.getenv("OVA_RENDER_SUBTITLE_SIZE", "medium"),
+    "render_subtitle_bottom": os.getenv("OVA_RENDER_SUBTITLE_BOTTOM", "middle"),
+    "render_subtitle_highlight": os.getenv("OVA_RENDER_SUBTITLE_HIGHLIGHT", "1"),
+    "render_highlight_source": os.getenv("OVA_RENDER_HIGHLIGHT_SOURCE", "ai"),
+    # 画面与配音
+    "render_kenburns": os.getenv("OVA_RENDER_KENBURNS", "1"),
+    "render_tts_rate": os.getenv("OVA_RENDER_TTS_RATE", ""),   # 留空=用音色自带语速
     # ---- 发布 ----
     # 两个平台默认都关：发布是破坏性动作，必须人工先确认账号和环境就绪再打开。
     "publish_xhs_enabled": os.getenv("PUBLISH_XHS_ENABLED", "0"),

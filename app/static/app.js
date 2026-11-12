@@ -693,7 +693,11 @@ async function loadSettings() {
   // 老库里没有这些键时，下拉框会显示空白；给一个和代码一致的默认值，
   // 免得看起来像"配置丢了"
   [["render_engine", "local"], ["local_audio_mode", "mix"], ["render_flower", "1"],
-   ["render_bgm", "1"], ["render_bgm_volume", "0.14"]].forEach(([name, value]) => {
+   ["render_flower_style", "auto"], ["render_flower_density", "normal"],
+   ["render_bgm", "1"], ["render_bgm_volume", "0.14"],
+   ["render_subtitle_size", "medium"], ["render_subtitle_bottom", "middle"],
+   ["render_subtitle_highlight", "1"], ["render_highlight_source", "ai"],
+   ["render_kenburns", "1"]].forEach(([name, value]) => {
     if (form.elements[name] && !form.elements[name].value) form.elements[name].value = value;
   });
   if (form.elements.default_duration) {

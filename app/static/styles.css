@@ -1726,6 +1726,18 @@ kbd {
 }
 .settings-group-title { margin: 0; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); }
 
+/* 出片参数的小标题（字幕 / 花字 / 音乐 / 配音与画面）：
+   跟工作台右侧的页签一一对应，扫一眼就知道这组是干什么的。 */
+.settings-subtitle {
+  margin: 14px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.settings-subtitle:first-of-type { border-top: 0; padding-top: 0; }
+
 /* 「高级」折叠块：默认收起，只留一句「一般不用动」。
    默认路径之外的东西不该摆在第一眼，否则不懂的人会以为自己选错了。 */
 .settings-more {

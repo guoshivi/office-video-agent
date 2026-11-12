@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import io
 import math
-import unicodedata
 from functools import lru_cache
 from pathlib import Path
 
@@ -70,6 +69,15 @@ _FONT_CANDIDATES = (
 
 class FlowerError(ValueError):
     pass
+
+
+# 花字里不能出现的字符：断句标点、括号、省略号这类"视觉噪音"。
+# 小数点和斜杠要放行——「1.5万」「6元/平」正是中介最想做成大字的价格。
+_PUNCT_BLOCK = frozenset('，。！？、；：,。!?;:（）()【】「」《》…—～·"\'“”‘’')
+
+
+def has_punct(text: str) -> bool:
+    return any(char in _PUNCT_BLOCK for char in str(text or ""))
 
 
 def fonts_ready() -> bool:
@@ -161,7 +169,7 @@ def render(text: str, style: str, font_path: str | None = None, scale: float = 1
     text = str(text or '').strip()
     if not 2 <= len(text) <= 6:
         raise FlowerError('花字必须 2..6 个字')
-    if any(unicodedata.category(ch).startswith('P') or ch == '～' for ch in text):
+    if has_punct(text):
         raise FlowerError('花字不能带标点')
 
     font_path = _style_font(style, font_path)

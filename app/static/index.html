@@ -219,32 +219,104 @@
                   <option value="original">只要原声（不配口播）</option>
                   <option value="mute">完全静音</option>
                 </select><small>新建任务时还能单独改这一条。现场安静、有钥匙声脚步声就保留，能加分。</small></label>
+
+                <p class="settings-subtitle">字幕</p>
+                <div class="form-row">
+                  <label>大小<select name="render_subtitle_size">
+                    <option value="small">小（一行 12 字）</option>
+                    <option value="medium">中（一行 11 字，推荐）</option>
+                    <option value="large">大（一行 9 字）</option>
+                  </select></label>
+                  <label>位置<select name="render_subtitle_bottom">
+                    <option value="high">靠上（离底 380）</option>
+                    <option value="middle">居中（离底 260）</option>
+                    <option value="low">靠下（离底 170）</option>
+                  </select></label>
+                </div>
+                <div class="form-row">
+                  <label>重点词上色<select name="render_subtitle_highlight">
+                    <option value="1">开（面积租金变金色）</option>
+                    <option value="0">关（全白）</option>
+                  </select></label>
+                  <label>重点词来源<select name="render_highlight_source">
+                    <option value="ai">AI 挑（要配模型 key）</option>
+                    <option value="rules">按数字规则挑</option>
+                    <option value="manual">只认【方括号】标记</option>
+                  </select><small>AI 挑不出会静默退回规则，不会挡出片。</small></label>
+                </div>
+
+                <p class="settings-subtitle">花字</p>
                 <div class="form-row">
                   <label>花字贴片<select name="render_flower">
-                    <option value="1">开（推荐，卖点数字上大字）</option>
+                    <option value="1">开（卖点数字上大字）</option>
                     <option value="0">关</option>
                   </select></label>
+                  <label>出现频率<select name="render_flower_density">
+                    <option value="low">少（整条 1 处）</option>
+                    <option value="normal">标准（2 处）</option>
+                    <option value="high">多（3 处，跟工作台一致）</option>
+                  </select></label>
+                </div>
+                <label>花字风格<select name="render_flower_style">
+                  <option value="auto">智能轮换（常用的 6 种）</option>
+                  <option value="burst_orange">橙黄爆炸 — 提醒/卖点</option>
+                  <option value="burst_red">红黄爆炸 — 情绪/人群</option>
+                  <option value="glow_title">顶部光晕 — 品牌/品名</option>
+                  <option value="bottom_glow">底部发光 — 结论/价格</option>
+                  <option value="badge">圆形徽章 — 认证/推荐</option>
+                  <option value="tape">黄色胶带 — 手作/生活感</option>
+                  <option value="bubble">对话气泡 — 口播/疑问</option>
+                  <option value="neon">霓虹灯牌 — 夜感/潮流</option>
+                  <option value="brush">笔刷下划线 — 重点</option>
+                  <option value="shadow3d">立体投影 — 力量/强调</option>
+                  <option value="ribbon_badge">绶带横幅 — 颁奖/纪念</option>
+                  <option value="pendant_tag">吊牌挂坠 — 价格/标签</option>
+                  <option value="seal">圆形印章 — 认证/盖章</option>
+                  <option value="frame_gold">金色画框 — 高级/礼盒</option>
+                  <option value="kuaile_pop">快乐体 — 活泼/年轻</option>
+                  <option value="masha_ink">毛笔手写 — 国货/文化感</option>
+                  <option value="longcang_script">龙藏手写 — 手作/温度</option>
+                  <option value="qingke_banner">黄油横幅 — 促销/醒目</option>
+                  <option value="gradient_fill">渐变填充 — 潮流/美妆</option>
+                  <option value="outline_glow">空心描边 — 科技/高级</option>
+                </select><small>选具体风格就整条统一用一种；智能轮换按短语哈希挑，同一条片子重出两次结果一样。</small></label>
+
+                <p class="settings-subtitle">音乐</p>
+                <div class="form-row">
                   <label>背景音乐<select name="render_bgm">
                     <option value="1">开（推荐）</option>
                     <option value="0">关</option>
                   </select></label>
+                  <label>音量<input name="render_bgm_volume" type="number" min="0" max="0.5" step="0.01" placeholder="0.14"><small>0.14 是口播不被压住的上限附近；听不见就调到 0.2。</small></label>
                 </div>
+                <label>BGM 情绪<select name="render_bgm_mood">
+                  <option value="">自动（按房源换）</option>
+                  <option value="明亮">明亮</option>
+                  <option value="愉悦">轻快</option>
+                  <option value="平静">松弛</option>
+                  <option value="高级">质感留白</option>
+                  <option value="动感">节奏推进</option>
+                  <option value="兴奋">开场脉冲</option>
+                  <option value="俏皮">俏皮</option>
+                  <option value="史诗">史诗</option>
+                  <option value="悲伤">慢叙</option>
+                </select></label>
+
+                <p class="settings-subtitle">配音与画面</p>
                 <div class="form-row">
-                  <label>BGM 情绪<select name="render_bgm_mood">
-                    <option value="">自动（按房源换）</option>
-                    <option value="明亮">明亮</option>
-                    <option value="愉悦">轻快</option>
-                    <option value="平静">松弛</option>
-                    <option value="高级">质感留白</option>
-                    <option value="动感">节奏推进</option>
-                    <option value="兴奋">开场脉冲</option>
-                    <option value="俏皮">俏皮</option>
-                    <option value="史诗">史诗</option>
-                    <option value="悲伤">慢叙</option>
+                  <label>语速<select name="render_tts_rate">
+                    <option value="">跟随音色（默认）</option>
+                    <option value="-5%">慢一点（看得清字幕）</option>
+                    <option value="+10%">标准偏快</option>
+                    <option value="+25%">快（信息密度高）</option>
                   </select></label>
-                  <label>BGM 音量<input name="render_bgm_volume" type="number" min="0" max="0.5" step="0.01" placeholder="0.14"><small>0.14 是口播不被压住的上限附近；觉得听不见就调到 0.2。</small></label>
+                  <label>运镜<select name="render_kenburns">
+                    <option value="1">开（缓推缓拉，画面有呼吸感）</option>
+                    <option value="0">关（纯静止画面）</option>
+                  </select></label>
                 </div>
-                <p class="section-note">出片、配音、字幕、花字、BGM 都在这台电脑上完成，不需要另一台机器配合。字幕一律单行，长句会按标点和语速切成几段依次出，不折两行。字幕里写【拎包入驻】这样的方括号词，会被当成重点词变金色，并挑一处做大字花字。</p>
+                <p class="section-note">出片、配音、字幕、花字、BGM 都在这台电脑上完成，不需要另一台机器配合。字幕一律单行，长句会按标点和语速切成几段依次出，不折两行。字幕里写【拎包入驻】这样的方括号词，会被当成重点词变金色，并挑一处做大字花字。贴纸和音效是远程工作台的能力，本机引擎还没接，需要就去下面切工作台。</p>
+                <div class="form-row"><button class="button button-primary" type="submit">保存出片参数</button></div>
                 <details class="settings-more">
                   <summary>改用远程视频工作台（一般不用动）</summary>
                   <label>视频工作台 API 地址<input name="workbench_url" placeholder="http://192.168.x.x:8765"></label>

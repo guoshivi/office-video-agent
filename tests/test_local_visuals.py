@@ -77,6 +77,23 @@ def test_flower_windows_skip_when_no_keyword():
     assert _flower_windows(_sentences(["欢迎私信咨询房源", "谢谢观看"])) == []
 
 
+def test_flower_windows_density_and_style_are_configurable():
+    """设置页的「出现频率」和「花字风格」真的落到窗口上，不是摆设。"""
+    sentences = _sentences(["面积230平", "格局3隔", "租金1.5万", "欢迎私信咨询"])
+    assert len(_flower_windows(sentences, density=1)) == 1
+    assert len(_flower_windows(sentences, density=3)) == 3
+    fixed = _flower_windows(sentences, density=1, style="badge")
+    assert fixed[0]["style"] == "badge"
+    auto = _flower_windows(sentences, density=1, style="auto")
+    assert auto[0]["style"] in flower_text.HOUSE_STYLES
+
+
+def test_flower_windows_ignore_unknown_style():
+    """样式名写错了退回常用池，别让整条花字消失。"""
+    windows = _flower_windows(_sentences(["面积230平"]), density=1, style="not_a_style")
+    assert windows and windows[0]["style"] in flower_text.HOUSE_STYLES
+
+
 # ------------------------------------------------------------------ 字幕标记
 
 def test_parse_marks_strips_brackets():
@@ -102,6 +119,42 @@ def test_build_ass_uses_highlights_from_ai():
         (1080, 1920), "Noto Sans SC Black",
     )
     assert r"{\c&H00D7FF&}三号线" in ass
+
+
+def test_build_ass_takes_size_and_position_from_settings():
+    """字幕大小 / 位置是设置页给的值，不是写死的常量。"""
+    ass = build_ass(
+        [{"text": "面积230平", "start": 0, "end": 3, "label": {}}],
+        (1080, 1920), "Noto Sans SC Black", size=100, margin_v=170,
+    )
+    assert "Style: Cap,Noto Sans SC Black,100," in ass
+    assert ",70,70,170,1" in ass
+
+
+def test_wide_canvas_scales_caption_proportionally():
+    """16:9 画布更宽，字号跟着放大，不然横版字幕会小得像脚注。"""
+    ass = build_ass(
+        [{"text": "面积230平", "start": 0, "end": 3, "label": {}}],
+        (1920, 1080), "Noto Sans SC Black", size=120,
+    )
+    assert "Style: Cap,Noto Sans SC Black,213," in ass
+
+
+def test_highlight_can_be_turned_off():
+    ass = build_ass(
+        [{"text": "面积230平", "start": 0, "end": 3, "label": {}}],
+        (1080, 1920), "Noto Sans SC Black", highlight=False,
+    )
+    assert "00D7FF" not in ass
+
+
+def test_manual_only_source_skips_regex_highlight():
+    """选了「只认【】标记」，没标记的句子就该全白。"""
+    ass = build_ass(
+        [{"text": "面积230平", "start": 0, "end": 3, "label": {}}],
+        (1080, 1920), "Noto Sans SC Black", highlight_regex=False,
+    )
+    assert "00D7FF" not in ass
 
 
 # ------------------------------------------------------------------ BGM

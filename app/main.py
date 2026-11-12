@@ -159,9 +159,18 @@ class SettingsUpdate(BaseModel):
     local_audio_mode: str = Field(default="mix", max_length=20)
     # 本机出片的观感：花字贴片、BGM（曲库在 data/render-env/music）
     render_flower: str = Field(default="1", max_length=4)
+    render_flower_style: str = Field(default="auto", max_length=40)
+    render_flower_density: str = Field(default="high", max_length=10)
     render_bgm: str = Field(default="1", max_length=4)
     render_bgm_mood: str = Field(default="", max_length=12)
     render_bgm_volume: float = Field(default=0.14, ge=0, le=0.5)
+    # 字幕与配音（对应工作台右侧那几个页签）
+    render_subtitle_size: str = Field(default="medium", max_length=10)
+    render_subtitle_bottom: str = Field(default="middle", max_length=10)
+    render_subtitle_highlight: str = Field(default="1", max_length=4)
+    render_highlight_source: str = Field(default="ai", max_length=10)
+    render_kenburns: str = Field(default="1", max_length=4)
+    render_tts_rate: str = Field(default="", max_length=10)
     # 大模型：留空表示不用 AI，文案走规则版
     llm_provider: str = Field(default="", max_length=20)
     llm_api_key: str = Field(default="", max_length=300)
@@ -607,9 +616,17 @@ def update_settings(payload: SettingsUpdate):
         raise HTTPException(400, "渲染引擎只能是 workbench 或 local")
     if values["local_audio_mode"] not in {"mix", "original", "voice", "mute"}:
         raise HTTPException(400, "本地出片原声只能是 mix / original / voice / mute")
-    for flag in ("render_flower", "render_bgm"):
+    for flag in ("render_flower", "render_bgm", "render_subtitle_highlight", "render_kenburns"):
         if values[flag] not in {"0", "1"}:
-            raise HTTPException(400, "花字/背景音乐开关只能是 0 或 1")
+            raise HTTPException(400, "花字/背景音乐/重点词/运镜开关只能是 0 或 1")
+    if values["render_subtitle_size"] not in {"small", "medium", "large"}:
+        raise HTTPException(400, "字幕大小只能是 small / medium / large")
+    if values["render_subtitle_bottom"] not in {"high", "middle", "low"}:
+        raise HTTPException(400, "字幕位置只能是 high / middle / low")
+    if values["render_flower_density"] not in {"low", "normal", "high"}:
+        raise HTTPException(400, "花字频率只能是 low / normal / high")
+    if values["render_highlight_source"] not in {"ai", "rules", "manual"}:
+        raise HTTPException(400, "重点词来源只能是 ai / rules / manual")
     if values["llm_provider"] and values["llm_provider"] not in {"ark", "deepseek"}:
         raise HTTPException(400, "模型服务商只支持 ark（豆包）或 deepseek")
     if values["llm_base_url"] and not values["llm_base_url"].startswith(("http://", "https://")):

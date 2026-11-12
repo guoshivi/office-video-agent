@@ -223,3 +223,32 @@ def test_workbench_render_flow():
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_render_parameter_settings_roundtrip():
+    """设置页那些跟工作台对齐的参数，存得进也读得回，写错了要 400。"""
+    with TestClient(app) as client:
+        current = client.get("/api/settings").json()
+        payload = {
+            **current,
+            "render_subtitle_size": "large",
+            "render_subtitle_bottom": "low",
+            "render_flower_style": "badge",
+            "render_flower_density": "normal",
+            "render_highlight_source": "manual",
+            "render_subtitle_highlight": "0",
+            "render_kenburns": "0",
+            "render_tts_rate": "+25%",
+        }
+        saved = client.put("/api/settings", json=payload)
+        assert saved.status_code == 200, saved.text
+        body = saved.json()
+        assert body["render_subtitle_size"] == "large"
+        assert body["render_flower_style"] == "badge"
+        assert body["render_highlight_source"] == "manual"
+        assert body["render_kenburns"] == "0"
+
+        assert client.put("/api/settings", json={**payload, "render_subtitle_size": "huge"}).status_code == 400
+        assert client.put("/api/settings", json={**payload, "render_highlight_source": "guess"}).status_code == 400
+        # 复位，别把后面用例的前提改掉
+        assert client.put("/api/settings", json=current).status_code == 200
