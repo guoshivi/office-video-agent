@@ -22,3 +22,6 @@ Thumbs.db
 vendor/**/*.exe
 vendor/**/data/
 vendor/**/cookies.json
+
+# 交付包是构建产物，不进仓库（历史里的那个也一并清掉）
+房源视频助手-源码-*.zip
