@@ -1894,3 +1894,32 @@ kbd {
 .settings-more > summary:hover { color: var(--text-2); }
 .settings-more[open] { display: grid; gap: 14px; }
 .settings-more[open] > summary { margin-bottom: 2px; }
+
+/* ---------------------------------------------------- 房源库：租金写法速查 */
+.rule-panel {
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-2);
+}
+.rule-panel > summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+  list-style: none;
+}
+.rule-panel > summary::-webkit-details-marker { display: none; }
+.rule-panel > summary::before { content: "▸ "; color: var(--text-3); }
+.rule-panel[open] > summary::before { content: "▾ "; }
+.rule-panel ul { margin: 8px 0 4px; padding-left: 18px; }
+.rule-panel li { margin: 3px 0; }
+.rule-panel b { color: var(--text); font-weight: 600; }
+.rule-panel p { margin: 0; font-size: 12px; color: var(--text-3); }
+.rule-panel code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
+  font-size: 12px;
+}

@@ -92,50 +92,124 @@ def _daily_money(value: float) -> str:
     return f"{value:.1f}".rstrip("0").rstrip(".")
 
 
-def monthly_rent(facts: dict, area: float | None = None) -> float | None:
-    """把各种写法的租金统一折算成「元/月」。
+# 中介报价的合理区间（元/㎡/月）。低于 8 大概是别的单位，高于 800 大概是
+# 整层总价或填错了列。两边越界都说明这套写法我没读懂，宁可不报价。
+PLAUSIBLE_UNIT = (8.0, 800.0)
 
-    能吃下这几种：3.5元/平/天、3.5/㎡/天、2.8万/月、28000元/月、
-    28/平/月。判断不了单位的，按「单价」理解，面积也没有就返回 None。
 
-    最后过一道合理性校验：折出来的单价必须在 8~800 元/平/月之间。
-    房源表里 rent 字段填错的（比如把「35+5 格局」写进租金）会算出
-    「一天五万六」这种鬼话，宁可这句成本话不说，也不能在视频里报价。
+def _amount_of(raw: str) -> tuple[float | None, str]:
+    """从写法里取出「要乘面积的数」，并说明为什么这么取。
+
+    房源表里的写法是乱的，但这几种能确定：
+        35+5        租金 35 + 物业 5，客户实付合计 40
+        25+物业5块   同上，数字分两处写
+        35含物业     一口价 35，不再加
+        3.5万/月     先乘回一万
+    """
+    values = [float(v) for v in re.findall(r"\d+(?:\.\d+)?", raw)]
+    if not values:
+        return None, "认不出金额"
+    if "+" in raw and len(values) >= 2:
+        return sum(values), "租金+物业按合计"
+    if "含" in raw or "包" in raw:
+        return values[0], "含物业/含税一口价"
+    amount = values[0] * 10000 if "万" in raw else values[0]
+    return amount, ""
+
+
+def explain_rent(facts: dict, area: float | None = None) -> dict:
+    """把房源租金折算成月租，同时交代用的是哪套口径。
+
+    单位不明的裸数字（房源表里 657 条只写「40」「26」）走自动判别：
+    先按元/㎡/月试，单价落在合理区间就采纳；不落在再按元/㎡/天试。
+    判别结论会写进 note，跑一遍 audit() 就能看出哪些房源判定可疑。
     """
     raw = str(
         facts.get("租金") or facts.get("rent") or facts.get("rent_raw") or ""
     ).strip()
+    out: dict[str, Any] = {
+        "raw": raw, "monthly": None, "unit": "", "unit_price": None,
+        "ok": False, "note": "",
+    }
     if not raw:
-        return None
-    base = _first_number(raw)
-    if not base:
-        return None
+        out["note"] = "没填租金"
+        return out
 
-    is_wan = "万" in raw
-    amount = base * 10000 if is_wan else base
-    per_area = ("平" in raw or "㎡" in raw or "m2" in raw.lower())
-    per_day = ("天" in raw or "日" in raw)
+    amount, note = _amount_of(raw)
+    if not amount:
+        out["note"] = note
+        return out
 
-    value: float | None
+    sqm = float(area) if area else None
+    per_area = any(token in raw for token in ("平", "㎡", "m2", "m²", "方"))
+    per_day = "天" in raw or "日" in raw
+
     if per_area and per_day:
-        value = amount * area * 30 if area else None
-    elif per_area:
-        value = amount * area if area else None
+        unit = "元/㎡/天"
+    elif per_area and "月" in raw:
+        unit = "元/㎡/月"
     elif per_day:
-        value = amount * 30
+        unit = "元/天"
     elif "月" in raw:
-        value = amount
+        unit = "元/月"
+    elif per_area:
+        unit = ""  # 「40/平」没写天还是月
     elif amount >= 1000:
-        value = amount
+        unit = "元/月"  # 大数是整月总价，不像单价
     else:
-        value = amount * area * 30 if area else None
+        unit = ""  # 裸数字
 
-    if value and value > 0 and area:
-        unit_price = value / area
-        if not (8 <= unit_price <= 800):
-            logger.info("租金折算不合理（%.0f 元/平/月），这句成本话不出：%s", unit_price, raw)
-            return None
-    return value
+    if not unit:
+        if sqm:
+            # 依次试三种读法，谁的单价落在合理区间就用谁：单价月 → 整月总价 → 单价天
+            for guess, price in (
+                ("元/㎡/月", amount),
+                ("元/月", amount / sqm),
+                ("元/㎡/天", amount * 30),
+            ):
+                if PLAUSIBLE_UNIT[0] <= price <= PLAUSIBLE_UNIT[1]:
+                    unit = guess
+                    note = f"裸数字按{guess}理解"
+                    break
+        elif amount >= 300 and ("含" in raw or "包" in raw):
+            # 面积写的是「单间」「店面」，那就是一间房整月多少钱
+            unit = "元/月"
+            note = "无面积，按整月价理解"
+        if not unit and amount >= 1000:
+            unit = "元/月"
+        if not unit:
+            out["note"] = f"「{raw}」判不出是单价还是总价"
+            return out
+
+    if unit == "元/㎡/天":
+        monthly = amount * sqm * 30 if sqm else None
+    elif unit == "元/㎡/月":
+        monthly = amount * sqm if sqm else None
+    elif unit == "元/天":
+        monthly = amount * 30
+    else:
+        monthly = amount
+
+    if not monthly or monthly <= 0:
+        out.update(unit=unit, note="缺面积，折不出月租")
+        return out
+
+    unit_price = monthly / sqm if sqm else None
+    if unit_price and not (PLAUSIBLE_UNIT[0] <= unit_price <= PLAUSIBLE_UNIT[1]):
+        out.update(
+            unit=unit, unit_price=unit_price,
+            note=f"折出 {unit_price:.0f} 元/㎡/月，超出合理区间，不报价",
+        )
+        logger.info("租金折算不合理（%.0f 元/㎡/月）：%s", unit_price, raw)
+        return out
+
+    out.update(monthly=monthly, unit=unit, unit_price=unit_price, ok=True, note=note)
+    return out
+
+
+def monthly_rent(facts: dict, area: float | None = None) -> float | None:
+    """月租（元）。折不出来返回 None，调用方跳过成本句。"""
+    return explain_rent(facts, area)["monthly"]
 
 
 def context(facts: dict) -> dict[str, str]:

@@ -162,6 +162,17 @@
             <select id="property-status"><option value="">全部状态</option><option value="active">已匹配</option><option value="needs_review">待确认</option></select>
             <button class="button button-ghost" id="property-refresh">刷新</button>
           </div>
+          <details class="panel rule-panel">
+            <summary>租金怎么填，程序才不会念错（点开看五条）</summary>
+            <ul>
+              <li><b>只有数字就是「元/㎡/月」</b>：写 <code>40</code>，180 平按 7200/月 算。</li>
+              <li><b>租金和物业分开写</b>：<code>35+5</code> 两段相加，报合计 40。</li>
+              <li><b>一口价含物业</b>：<code>40含物业</code>、<code>40含税</code>，不再加。</li>
+              <li><b>整月总价</b>：写 <code>2500/月</code>；面积写「单间」的，<code>900</code> 就当整月价。</li>
+              <li><b>没定价就写「面谈」</b>，不要空着，也不要写到别的列 —— 这条照样出片，只是不报价。</li>
+            </ul>
+            <p>面积一列必须写数字；写了「可选」「可定制」就算不出工位和人均。改完跑一次 <code>python tools/rent_audit.py</code> 自检。</p>
+          </details>
           <div class="panel table-panel">
             <div class="table-wrap"><table><thead><tr><th>房源</th><th>面积 / 格局</th><th>租金原文</th><th>来源</th><th>标记</th><th>状态</th></tr></thead><tbody id="property-rows"></tbody></table></div>
             <div class="table-footer" id="property-total">共 0 条</div>

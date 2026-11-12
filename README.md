@@ -218,6 +218,7 @@ tools/
   fetch_publish_tools.py 拉取发布用的第三方二进制
   douyin_probe.py    CDP 探测抖音上传页，校准选择器
   ui_shot.py         给各个页面截图，改完前端用它对一眼
+  rent_audit.py      体检房源表租金写法：哪些能折成月租、按什么口径算的
 data/                数据库、上传视频、成片、导出包（不进 Git）
 docs/feishu-setup.md 飞书两种接法的完整步骤
 docs/quickstart.md   给不懂电脑的人看的一页纸：双击、看灯、三步出片
@@ -225,7 +226,7 @@ docs/review.md       审核台：预检规则、状态机、多维表格桥接
 docs/publish.md      发布链路、平台差异、已验证项与踩过的坑
 docs/runbook.md      运维手册：启动、日常流程、故障排查、模块边界
 docs/copy-hooks.md   文案钩子：三档话术、成本句折算、双平台标题
-docs/copy-hooks.md   文案钩子：三档话术、成本句折算、双平台标题
+docs/字段填写规范.md 房源表怎么填：租金七种写法、面积必须写数字、自检命令
 ```
 
 ## 迁移到另一台电脑

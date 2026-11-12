@@ -22,9 +22,39 @@ def test_sqm_per_month():
     assert hooks.monthly_rent({"面积": "220", "租金": "88元/平/月"}, 220) == pytest.approx(19360)
 
 
-def test_dirty_rent_field_is_rejected():
-    # 房源表把「35+5 格局」写进了租金，硬算会折出「一天五万六」这种鬼话
-    assert hooks.monthly_rent({"面积": "1600", "租金": "35+5"}, 1600) is None
+def test_bare_number_is_unit_price_per_sqm_per_month():
+    """房源表 657 条只写「40」这种裸数字，中位 26——只能是元/㎡/月。"""
+    assert hooks.monthly_rent({"面积": "180", "租金": "40"}, 180) == pytest.approx(7200)
+
+
+def test_bare_number_still_reads_daily_when_monthly_is_absurd():
+    """只写「3.5」时按单价月算只有 3.5 元/㎡/月，明显不对，应改判成单价天。"""
+    assert hooks.monthly_rent({"面积": "180", "租金": "3.5"}, 180) == pytest.approx(18900)
+
+
+def test_rent_plus_property_fee_is_summed():
+    """35+5 是租金 35 加物业 5，客户实付合计 40。"""
+    result = hooks.explain_rent({"面积": "1600", "租金": "35+5"}, 1600)
+    assert result["monthly"] == pytest.approx(64000)
+    assert result["unit"] == "元/㎡/月"
+
+
+def test_inclusive_price_does_not_add():
+    assert hooks.monthly_rent({"面积": "175", "租金": "35含物业"}, 175) == pytest.approx(6125)
+
+
+def test_total_price_for_single_room_without_area():
+    """面积写的是「单间」，那 900 就是一间房整月 900。"""
+    assert hooks.monthly_rent({"面积": "单间", "租金": "900包物业"}, None) == pytest.approx(900)
+
+
+def test_rent_listed_as_year_total_is_rejected():
+    """318 万挂在 472 平上折出 6737 元/㎡/月，明显不是月租，不报价。"""
+    assert hooks.monthly_rent({"面积": "472", "租金": "318万"}, 472) is None
+
+
+def test_negotiable_rent_is_not_a_number():
+    assert hooks.monthly_rent({"面积": "956", "租金": "面谈"}, 956) is None
 
 
 def test_context_derives_talkable_numbers():
