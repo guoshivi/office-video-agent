@@ -7,8 +7,10 @@ httpx>=0.27,<1
 python-dotenv>=1.0,<2
 lark-oapi>=1.4,<2
 
-# 本机出片：这三个缺一个，出片就会直接报错退出
-# （edge_tts 生成口播，numpy/opencv 做智能选镜——挑干净、不糊、不糊脸的空镜）
+# 本机出片：这几个缺一个，出片就会直接报错退出
+# （edge_tts 生成口播，numpy/opencv 做智能选镜——挑干净、不糊、不糊脸的空镜，
+#  Pillow 画花字贴片）
 edge-tts>=6.1,<8
 numpy>=1.26,<3
 opencv-python-headless>=4.9,<5
+pillow>=10,<12

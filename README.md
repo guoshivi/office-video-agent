@@ -65,8 +65,10 @@ start.bat
 
 首次运行会建虚拟环境、装依赖，然后起服务到 8770 端口。
 浏览器打开 <http://127.0.0.1:8770>，导入房源 Excel 就能用。
-出片、配音、字幕都在这台电脑上完成，不需要另一台机器配合——
-ffmpeg 随包放在 `vendor/ffmpeg/`，口播和选镜用的依赖写在 `requirements.txt` 里。
+出片、配音、字幕、花字、BGM 都在这台电脑上完成，不需要另一台机器配合——
+ffmpeg 随包放在 `vendor/ffmpeg/`，口播和选镜用的依赖写在 `requirements.txt` 里，
+花字字体（`data/render-env/flower-fonts`，OFL 可商用）和 9 首 BGM
+（`data/render-env/music`，本机合成）也随包带上。
 
 > 端口固定 8770。8765 被「视频工作台」占用，而且它的健康检查脚本会杀掉所有监听 8765 的进程。
 
@@ -199,6 +201,8 @@ app/
   services.py        口播生成、脱敏、任务序列化
   excel_import.py    房源 Excel 导入（保留原始行与颜色标记）
   hygiene.py         措辞卫生：内部提醒句的词表与摘句（出片前 + 审核时共用）
+  flower_text.py     花字：把「230平」这类卖点画成透明贴片（Pillow 本地画，20 种样式）
+  bgm.py             内置 BGM 曲库：读清单、按房源稳定选曲
   semantic.py        向量 + 规则混合检索
   workbench_client.py 视频工作台适配（建项目/索引/出片/回传）
   ready.py           开工体检：三项人话结论 + 一键启动发布服务

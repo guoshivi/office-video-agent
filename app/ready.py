@@ -46,12 +46,14 @@ RENDER_MODULES = [
     ("edge_tts", "口播配音"),
     ("numpy", "选镜计算"),
     ("cv2", "画面检测"),
+    ("PIL", "花字贴片"),
 ]
 RENDER_FONT = BASE_DIR / "data" / "render-env" / "NotoSansSCBlack.ttf"
 RENDER_PACKAGES = [
     "edge-tts>=6.1,<8",
     "numpy>=1.26,<3",
     "opencv-python-headless>=4.9,<5",
+    "pillow>=10,<12",
 ]
 
 XHS_PORT = 18060

@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -183,4 +184,77 @@ def normalize_script(text: str) -> str:
     result = "".join(out)
     if len(result) < 20:
         raise LLMError("模型文案太短，换一次试试")
+    return result
+
+
+# ------------------------------------------------------------------ 字幕高亮词
+
+HIGHLIGHT_SYSTEM = (
+    "你是短视频字幕编辑。下面按行给你口播文案，每行一句。"
+    "请为每一句挑出 1 到 2 个最值得在字幕里强调的词。"
+    "要求：1) 必须原样摘自该句，不能改写、不能拼接；"
+    "2) 优先租金、面积、工位数、楼层、位置、核心卖点；"
+    "3) 每句最多两个，没有合适的就不挑；"
+    '只输出 JSON，键是行号（从 1 开始），值是词语数组，例如 {"1":["230平"],"2":["3号线"]}；'
+    "不要 Markdown、不要解释。"
+)
+
+
+def pick_highlights(lines: list[str]) -> list[list[str]]:
+    """让配置的模型为每句挑字幕强调词。
+
+    返回与 lines 等长的列表；没配置、调用失败或答案不合法时返回
+    全空列表——调用方回退到正则挑词，出片不能因为挑词失败而中断。
+    """
+    lines = [str(line or "") for line in (lines or [])]
+    if not lines:
+        return []
+    if not config()["ready"]:
+        return []
+    numbered = "\n".join(f"{i}. {line}" for i, line in enumerate(lines, start=1))
+    try:
+        text = chat(
+            [
+                {"role": "system", "content": HIGHLIGHT_SYSTEM},
+                {"role": "user", "content": f"文案：\n{numbered}\n\n请按 JSON 返回每句的重点词。"},
+            ],
+            temperature=0.2,
+            timeout=30,
+        )
+    except LLMError as error:
+        logger.info("挑高亮词失败，回退正则：%s", error)
+        return []
+
+    raw = str(text or "").strip()
+    raw = re.sub(r"^```[a-zA-Z]*\s*", "", raw)
+    raw = re.sub(r"\s*```$", "", raw)
+    start, end = raw.find("{"), raw.rfind("}")
+    if start < 0 or end <= start:
+        return []
+    try:
+        data = json.loads(raw[start:end + 1])
+    except ValueError:
+        return []
+    if not isinstance(data, dict):
+        return []
+
+    result: list[list[str]] = []
+    for index, line in enumerate(lines, start=1):
+        picked_raw = data.get(str(index)) or data.get(index) or []
+        if not isinstance(picked_raw, list):
+            picked_raw = []
+        picked = []
+        for word in picked_raw:
+            if not isinstance(word, str):
+                continue
+            word = word.strip()
+            # 必须原样出现在该句里，防模型幻觉词；一句最多两个
+            if not word or len(word) > 12 or word not in line:
+                continue
+            if any(word in other or other in word for other in picked):
+                continue
+            picked.append(word)
+            if len(picked) >= 2:
+                break
+        result.append(picked)
     return result

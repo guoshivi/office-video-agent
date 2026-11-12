@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -28,9 +29,11 @@ import shutil
 import subprocess
 import tempfile
 import time
+import unicodedata
 import uuid
 from pathlib import Path
 
+from . import bgm, flower_text
 from .asr import _windows_path
 from .db import get_settings, utc_now
 from .shot_select import pick_clips
@@ -195,6 +198,21 @@ _KEYWORD = re.compile(
     r"\d+(?:\.\d+)?\s*(?:平方米|平方|平米|平|㎡|元/平方米|元/平|元|万|层|个工位|工位|隔|年|号线|号楼)"
 )
 
+# 手动标记：【拎包入驻】写在文案里 → 字幕里高亮、并当作花字候选
+_MARK = re.compile(r"【([^】\n]{1,12})】")
+
+
+def parse_marks(text: str) -> tuple[str, list[str]]:
+    """把【词】标记从文案里摘出来。返回 (干净文案, 标记词列表)。"""
+    marks: list[str] = []
+
+    def _keep(match: re.Match) -> str:
+        marks.append(match.group(1))
+        return match.group(1)
+
+    clean = _MARK.sub(_keep, str(text or ""))
+    return clean, marks
+
 
 def _ass_text(text: str) -> str:
     """ASS 的正文要转义，换行用 \\N，大括号是标签起始符。"""
@@ -205,18 +223,32 @@ def _ass_text(text: str) -> str:
     )
 
 
-def _highlight(text: str, limit: int = 2) -> str:
-    """给一句话里最值钱的词上色，一句最多两处——多了就成花瓜了。"""
-    count = 0
+def _highlight(text: str, limit: int = 2, marks: tuple[str, ...] = ()) -> str:
+    """给一句话里最值钱的词上色，一句最多两处——多了就成花瓜了。
+
+    优先级：手动/AI 给的词 > 正则挑数字卖点。
+    """
+    escaped = _ass_text(text)
+    if marks:
+        count = 0
+        for word in marks:
+            piece = _ass_text(word)
+            if piece and piece in escaped and count < limit:
+                escaped = escaped.replace(piece, f"{_HIGHLIGHT_OPEN}{piece}{_HIGHLIGHT_CLOSE}", 1)
+                count += 1
+        if count:
+            return escaped
+
+    used = 0
 
     def wrap(match: re.Match) -> str:
-        nonlocal count
-        if count >= limit:
+        nonlocal used
+        if used >= limit:
             return match.group(0)
-        count += 1
+        used += 1
         return f"{_HIGHLIGHT_OPEN}{match.group(0)}{_HIGHLIGHT_CLOSE}"
 
-    return _KEYWORD.sub(wrap, _ass_text(text))
+    return _KEYWORD.sub(wrap, escaped)
 
 
 def _ass_time(seconds: float) -> str:
@@ -249,9 +281,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     for sentence in sentences:
         start = _ass_time(sentence["start"])
         end = _ass_time(sentence["end"])
+        # 【词】手动标记优先，其次 AI 挑的词，都没有才走正则
+        clean, inline_marks = parse_marks(sentence["text"])
+        words = tuple(sentence.get("marks") or inline_marks or ())
+        if not words:
+            words = tuple(w for w in (sentence.get("highlights") or []) if w in clean)
         # 先按标点折行，再逐行上色：跨行的词不会被拆成半个颜色
-        wrapped = _wrap(sentence["text"]).split("\n")
-        text = r"\N".join(_highlight(line) for line in wrapped)
+        wrapped = _wrap(clean).split("\n")
+        text = r"\N".join(_highlight(line, marks=tuple(w for w in words if w in line)) for line in wrapped)
         lines.append(f"Dialogue: 0,{start},{end},Cap,,0,0,0,,{text}")
         label = sentence.get("label") or {}
         if label.get("title"):
@@ -292,6 +329,140 @@ def _zoom_filter(item: dict, index: int, fps: int, canvas: tuple[int, int] = (CA
     )
 
 
+# ------------------------------------------------------------------ 花字层
+
+
+def _flower_phrase(sentence: dict) -> str:
+    """从一句文案里挑花字短语：手动【标记】优先，其次数字卖点。
+
+    花字必须是 2~6 个字、不带标点——这是 flower_text 的硬约束，
+    「230 平」「拎包入驻」合格，「紧邻 3 号线地铁口」不合格。
+    """
+    for word in sentence.get("marks") or ():
+        word = word.strip()
+        if 2 <= len(word) <= 6 and not any(
+            unicodedata.category(ch).startswith("P") for ch in word
+        ):
+            return word
+    match = _KEYWORD.search(sentence["text"] or "")
+    if match:
+        phrase = re.sub(r"\s+", "", match.group(0))
+        if 2 <= len(phrase) <= 6 and not any(
+            unicodedata.category(ch).startswith("P") for ch in phrase
+        ):
+            return phrase
+    return ""
+
+
+def _flower_windows(sentences: list[dict]) -> list[dict]:
+    """挑最多两处花字，给出显示窗口。
+
+    花字不是字幕的复读机：候选词从整条文案里收集，落点放在开场和
+    中段——观众先进眼「230平」，几秒后才听到念这句，比同屏重复更有用。
+    一条片子两处封顶，样式按短语哈希轮换，重渲结果一致。
+    """
+    if not flower_text.fonts_ready() or not sentences:
+        return []
+    phrases: list[str] = []
+    for sentence in sentences:
+        phrase = _flower_phrase(sentence)
+        if phrase and phrase not in phrases:
+            phrases.append(phrase)
+    if not phrases:
+        return []
+
+    slots = [i for i, s in enumerate(sentences) if s["end"] - s["start"] >= 1.2]
+    if not slots:
+        return []
+
+    windows: list[dict] = []
+    taken: set[int] = set()
+    for phrase in phrases[:2]:
+        # 落点优先级：说出这句的前一句（预告）→ 后一句（回味）→ 本句 → 任意空位。
+        # 同屏出现「字幕正在念 + 花字写着同样的词」属于浪费画面。
+        mention = next((i for i, s in enumerate(sentences) if phrase in s["text"]), None)
+        order: list[int] = []
+        if mention is not None:
+            if mention - 1 >= 0:
+                order.append(mention - 1)
+            if mention + 1 < len(sentences):
+                order.append(mention + 1)
+            order.append(mention)
+        order += slots
+        index = next((i for i in order if i in slots and i not in taken), None)
+        if index is None:
+            continue
+        taken.add(index)
+        slot = sentences[index]
+        start = slot["start"] + 0.15
+        duration = min(1.8, max(1.0, (slot["end"] - slot["start"]) * 0.5))
+        end = min(slot["end"], start + duration)
+        if end - start < 0.3:
+            continue
+        pool = flower_text.HOUSE_STYLES
+        digest = hashlib.sha256(phrase.encode("utf-8")).hexdigest()
+        windows.append({
+            "text": phrase,
+            "style": pool[int(digest[:8], 16) % len(pool)],
+            "start": start,
+            "end": end,
+        })
+    return windows
+
+
+def _flower_chains(
+    windows: list[dict], work: Path, canvas: tuple[int, int], first_input: int, prev_label: str,
+) -> tuple[list[str], list[str], str]:
+    """生成花字的输入与滤镜链。返回 (追加输入, 滤镜链, 结束标签)。
+
+    画不出来的（字体缺失、短语不合格）直接跳过，绝不拖垮整条出片。
+    """
+    width, height = canvas
+    inputs: list[str] = []
+    chains: list[str] = []
+    prev = prev_label
+    rendered: list[dict] = []
+    for item in windows:
+        png = work / f"flower-{len(rendered):02d}.png"
+        try:
+            image = flower_text.render(item["text"], item["style"])
+            image.save(png, "PNG")
+        except Exception as error:  # noqa: BLE001 - 花字失败只损失花字
+            logger.info("花字跳过 %r：%s", item["text"], error)
+            continue
+        rendered.append({**item, "png": png, "size": image.size})
+    for n, item in enumerate(rendered, start=1):
+        index = first_input + n - 1
+        w, h = item["size"]
+        limit = int(width * 0.82) if item["style"] in ("glow_title", "bottom_glow") else int(width * 0.44)
+        if w > limit:
+            ratio = limit / w
+            w, h = int(w * ratio), int(h * ratio)
+        a, b = item["start"], item["end"]
+        inputs += ["-loop", "1", "-i", str(item["png"])]
+        chains.append(
+            f"[{index}:v]format=rgba,"
+            f"fade=t=in:st={a:.3f}:d=0.20:alpha=1,"
+            f"fade=t=out:st={max(a, b - 0.18):.3f}:d=0.15:alpha=1,"
+            f"scale={w}:{h}[fl{n}]"
+        )
+        if item["style"] == "glow_title":
+            x = (width - w) // 2
+            y = int(height * 0.08)
+        else:
+            x = width - w - 70
+            y = int(height * 0.40)
+        # 别压到底部字幕区
+        floor = height - 420 - h
+        y = max(40, min(y, floor if floor >= 40 else height - h - 40))
+        label = f"[fv{n}]"
+        chains.append(
+            f"{prev}[fl{n}]overlay=x={x}:y={y}:enable='gte(t,{a:.3f})*lt(t,{b:.3f})'{label}"
+        )
+        prev = label
+    return inputs, chains, prev
+
+
 # ------------------------------------------------------------------ 渲染
 
 def _fontconfig_env() -> dict:
@@ -327,19 +498,26 @@ def render_storyboard(
     kenburns: bool = True,
     canvas: tuple[int, int] = (CANVAS_W, CANVAS_H),
     goal_seconds: float | None = None,
+    flower: bool = True,
+    music_path: str | Path | None = None,
+    music_volume: float = 0.14,
 ) -> Path:
     """把 storyboard 渲染成片。storyboard 每项：
 
-    {"text": "口播", "label": {"title": "工区", "sub": "可容纳20人办公"} 或省略}
+    {"text": "口播", "label": {"title": "工区", "sub": "可容纳20人办公"} 或省略,
+     "marks": ["手动高亮词"] 或省略, "highlights": ["AI 挑的词"] 或省略}
 
     goal_seconds：目标成片时长。给了就按它铺镜头（短文案多留空镜），
     不给就按口播的自然长度走。
 
     audio_mode：
-    - mix      原声压低铺底 + 口播（默认）
+    - mix      原声压低铺底 + 口播 + BGM（默认）
     - original 只保留素材原声（不合成口播，渲染更快）
-    - voice    只口播
+    - voice    只口播（给了 BGM 就带 BGM）
     - mute     无声
+
+    flower：叠花字层（卖点短语画成贴片，Pillow 本地画，不依赖模型）。
+    music_path：BGM 音轨；与素材原声是两路，互不影响，None 不加。
     """
     if audio_mode not in AUDIO_MODES:
         raise RenderError(f"audio_mode 只能是 {'/'.join(sorted(AUDIO_MODES))}，收到 {audio_mode!r}")
@@ -365,14 +543,18 @@ def render_storyboard(
     # 1) 逐句合成口播，定每句的时间窗（时长向目标时长靠，但不超过 10 秒/句）
     sentences: list[dict] = []
     for index, item in enumerate(storyboard):
+        # 【词】手动标记：字幕高亮 + 花字候选都用它；TTS 念干净文案
+        clean, inline_marks = parse_marks(str(item.get("text") or ""))
         speech = None
         spoken = 0.0
         if want_voice:
-            speech = synth_speech(item["text"], work / f"tts{index:02d}.mp3", voice=tts_voice, rate=tts_rate)
+            speech = synth_speech(clean, work / f"tts{index:02d}.mp3", voice=tts_voice, rate=tts_rate)
             spoken = media_duration(speech)
         sentences.append({
-            "text": item["text"],
+            "text": clean,
             "label": item.get("label") or {},
+            "marks": [m for m in (item.get("marks") or inline_marks or []) if m in clean],
+            "highlights": [w for w in (item.get("highlights") or []) if w in clean],
             "speech": speech,
             "spoken": spoken,
         })
@@ -421,11 +603,26 @@ def render_storyboard(
                 "sentence": sentence if piece == 0 else None,
             })
 
-    # 2) 拼滤镜：截段 → 变速 → Ken Burns → 接力，再叠字幕角标
+    # 2) 拼滤镜：截段 → 变速 → Ken Burns → 接力，再叠花字，最后烧字幕角标
+    flower_windows = _flower_windows(sentences) if flower else []
+    # 输入顺序：[0] 素材，[1..N] 口播，接着花字 PNG，最后 BGM
+    speech_count = len(sentences) if want_voice else 0
+    flower_inputs, flower_chains, flower_last = _flower_chains(
+        flower_windows, work, canvas, 1 + speech_count, "[base]",
+    )
+    music_input_index = 1 + speech_count + (len(flower_inputs) // 4)
+
     inputs = ["-i", str(source)]
     if want_voice:
         for sentence in sentences:
             inputs += ["-i", str(sentence["speech"])]
+    inputs += flower_inputs
+    use_music = (
+        music_path is not None and Path(music_path).is_file()
+        and audio_mode in {"mix", "voice"}
+    )
+    if use_music:
+        inputs += ["-stream_loop", "-1", "-i", str(music_path)]
 
     video_parts = []
     for index, item in enumerate(plan):
@@ -438,16 +635,31 @@ def render_storyboard(
     concat_in = "".join(f"[v{i}]" for i in range(len(plan)))
     video_parts.append(f"{concat_in}concat=n={len(plan)}:v=1:a=0[base]")
 
-    # 2.5) 字幕：写一份 ASS 再一次性烧上去。
+    # 2.5) 花字层叠在画面上（不进字幕轨：它带形状和渐变，ASS 画不出来）
+    if flower_chains:
+        video_parts += flower_chains
+    base_label = flower_last
+
+    # 2.6) 字幕：写一份 ASS 再一次性烧上去。
     # 文件名和 fontsdir 都用相对路径、并把 cwd 指到 data/render-env：
     # ffmpeg 的滤镜参数里冒号是分隔符，Windows 盘符会把参数切碎。
     ass_name = f"sub-{uuid.uuid4().hex[:8]}.ass"
     ass_path = DATA_RENDER_DIR / ass_name
     DATA_RENDER_DIR.mkdir(parents=True, exist_ok=True)
     ass_path.write_text(build_ass(sentences, canvas, font_family), encoding="utf-8")
-    video_parts.append(f"[base]ass={ass_name}:fontsdir=.[vout]")
+    video_parts.append(f"{base_label}ass={ass_name}:fontsdir=.[vout]")
 
-    # 3) 声音：按 audio_mode 决定原声与口播的去留
+    # 3) 声音：按 audio_mode 决定原声、口播、BGM 的去留
+    def _music_label() -> tuple[str, str]:
+        """BGM 一路：截到片长、限音量、结尾淡出。返回 (标签, 滤镜行)。"""
+        label = f"[{music_input_index}:a]"
+        chain = (
+            f"{label}atrim=0:{total},volume={music_volume:.2f},"
+            f"aresample=48000,aformat=channel_layouts=stereo,"
+            f"apad=whole_dur={total},afade=t=out:st={max(0.0, total - 0.8):.2f}:d=0.8[mus]"
+        )
+        return "[mus]", chain
+
     audio_parts: list[str] = []
     if audio_mode == "original":
         # 素材原声经常比画面短，apad 补静音到片长，别让 -shortest 把画面截了
@@ -465,11 +677,17 @@ def render_storyboard(
                 f"adelay={delay_ms}|{delay_ms}[s{index}]"
             )
             mix_labels.append(f"[s{index}]")
+        if use_music:
+            music_label, music_chain = _music_label()
+            audio_parts.append(music_chain)
+            mix_labels.append(music_label)
         audio_parts.append(
             # apad 必须在 atrim 前面：口播最后一句结束得早，不补静音的话
-            # 音轨会比画面短，-shortest 就把画面砍了（目标时长形同虚设）
+            # 音轨会比画面短，-shortest 就把画面砍了（目标时长形同虚设）。
+            # 加了 BGM 后口播+音乐可能顶满，alimiter 收一下别削波。
             "".join(mix_labels) + f"amix=inputs={len(mix_labels)}:normalize=0:duration=longest,"
-            f"apad=whole_dur={total},atrim=0:{total},asetpts=PTS-STARTPTS[aout]"
+            + ("alimiter=limit=0.95," if use_music else "")
+            + f"apad=whole_dur={total},atrim=0:{total},asetpts=PTS-STARTPTS[aout]"
         )
     else:  # mix
         # 素材原声常常比成片短（口播把片子拉长了），mix 必须按最长算，
@@ -483,11 +701,16 @@ def render_storyboard(
                 f"adelay={delay_ms}|{delay_ms}[s{index}]"
             )
             mix_labels.append(f"[s{index}]")
+        if use_music:
+            music_label, music_chain = _music_label()
+            audio_parts.append(music_chain)
+            mix_labels.append(music_label)
         audio_parts.append(
             # apad 必须在 atrim 前面：口播最后一句结束得早，不补静音的话
             # 音轨会比画面短，-shortest 就把画面砍了（目标时长形同虚设）
             "".join(mix_labels) + f"amix=inputs={len(mix_labels)}:normalize=0:duration=longest,"
-            f"apad=whole_dur={total},atrim=0:{total},asetpts=PTS-STARTPTS[aout]"
+            + ("alimiter=limit=0.95," if use_music else "")
+            + f"apad=whole_dur={total},atrim=0:{total},asetpts=PTS-STARTPTS[aout]"
         )
 
     filter_complex = ";".join(video_parts + audio_parts)
@@ -591,6 +814,7 @@ def start_render_job(payload: dict) -> dict:
             if not source_path.is_absolute():
                 source_path = BASE_DIR / source_path
             out = DATA_OUT_DIR / f"style-{render_id}.mp4"
+            visual = _local_audio_visual_settings(render_id)
             render_storyboard(
                 storyboard,
                 source_path,
@@ -600,6 +824,9 @@ def start_render_job(payload: dict) -> dict:
                 tts_voice=str(payload.get("tts_voice") or TTS_VOICE),
                 tts_rate=str(payload.get("tts_rate") or TTS_RATE),
                 kenburns=bool(payload.get("kenburns", True)),
+                flower=visual["flower"],
+                music_path=visual["music_path"],
+                music_volume=visual["music_volume"],
             )
             job["status"] = "done"
             job["output"] = str(out)
@@ -660,6 +887,31 @@ def _script_to_storyboard(script: str) -> list[dict]:
     return storyboard
 
 
+def _flag(settings: dict, key: str, default: str = "1") -> bool:
+    value = str(settings.get(key) or default).strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def _local_audio_visual_settings(task_key: str) -> dict:
+    """从系统设置读本机出片的花字/BGM 参数，供 render_storyboard 用。"""
+    settings = get_settings()
+    music_path = None
+    if _flag(settings, "render_bgm"):
+        mood = str(settings.get("render_bgm_mood") or "").strip() or None
+        track = bgm.pick(task_key, mood)
+        if track:
+            music_path = track["path"]
+    try:
+        volume = float(settings.get("render_bgm_volume") or 0.14)
+    except ValueError:
+        volume = 0.14
+    return {
+        "flower": _flag(settings, "render_flower"),
+        "music_path": music_path,
+        "music_volume": max(0.0, min(volume, 0.5)),
+    }
+
+
 def render_task_locally(task_row) -> Path:
     """不走视频工作台，直接在本机用 ffmpeg 出片。
 
@@ -683,6 +935,18 @@ def render_task_locally(task_row) -> Path:
         audio_mode = "mix"
     canvas = (CANVAS_WIDE_W, CANVAS_WIDE_H) if task_row["aspect_ratio"] == "16:9" else (CANVAS_W, CANVAS_H)
 
+    # AI 挑字幕高亮词：没配 key、调用失败都静默回退正则，不挡出片
+    try:
+        from .llm import pick_highlights
+        picks = pick_highlights([item["text"] for item in storyboard])
+        for item, words in zip(storyboard, picks):
+            if words:
+                item["highlights"] = words
+    except Exception as error:  # noqa: BLE001 - 高亮词是锦上添花
+        logger.info("AI 高亮词跳过：%s", error)
+
+    visual = _local_audio_visual_settings(str(task_row["task_no"]))
+
     out_dir = EXPORT_DIR / str(task_row["task_no"])
     out = out_dir / "local.mp4"
     # target_duration = 0 表示「根据原素材」：用素材视频流的真实长度当目标
@@ -702,6 +966,9 @@ def render_task_locally(task_row) -> Path:
         tts_rate=rate,
         canvas=canvas,
         goal_seconds=goal or None,
+        flower=visual["flower"],
+        music_path=visual["music_path"],
+        music_volume=visual["music_volume"],
     )
     logger.info("本地出片完成：%s（%.1fs）", out, time.time() - started)
 

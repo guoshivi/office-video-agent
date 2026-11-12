@@ -219,7 +219,32 @@
                   <option value="voice">只要口播</option>
                   <option value="mute">无声</option>
                 </select></label>
-                <p class="section-note">出片、配音、字幕都在这台电脑上完成，不需要另一台机器配合。</p>
+                <div class="form-row">
+                  <label>花字贴片<select name="render_flower">
+                    <option value="1">开（推荐，卖点数字上大字）</option>
+                    <option value="0">关</option>
+                  </select></label>
+                  <label>背景音乐<select name="render_bgm">
+                    <option value="1">开（推荐）</option>
+                    <option value="0">关</option>
+                  </select></label>
+                </div>
+                <div class="form-row">
+                  <label>BGM 情绪<select name="render_bgm_mood">
+                    <option value="">自动（按房源换）</option>
+                    <option value="明亮">明亮</option>
+                    <option value="愉悦">轻快</option>
+                    <option value="平静">松弛</option>
+                    <option value="高级">质感留白</option>
+                    <option value="动感">节奏推进</option>
+                    <option value="兴奋">开场脉冲</option>
+                    <option value="俏皮">俏皮</option>
+                    <option value="史诗">史诗</option>
+                    <option value="悲伤">慢叙</option>
+                  </select></label>
+                  <label>BGM 音量<input name="render_bgm_volume" type="number" min="0" max="0.5" step="0.01" placeholder="0.14"><small>0.14 是口播不被压住的上限附近；觉得听不见就调到 0.2。</small></label>
+                </div>
+                <p class="section-note">出片、配音、字幕、花字、BGM 都在这台电脑上完成，不需要另一台机器配合。字幕里写【拎包入驻】这样的方括号词，会被当成重点词变金色，并挑一处做大字花字。</p>
                 <details class="settings-more">
                   <summary>改用远程视频工作台（一般不用动）</summary>
                   <label>视频工作台 API 地址<input name="workbench_url" placeholder="http://192.168.x.x:8765"></label>

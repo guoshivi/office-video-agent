@@ -38,6 +38,11 @@ DATA_KEEP = {
     "render-env/fonts.conf",
     "render-env/app.ico",
 }
+# 花字字体（OFL）与 BGM 曲库（本机合成）是出片资产，跟着源码走
+DATA_KEEP_PREFIX = (
+    "render-env/flower-fonts/",
+    "render-env/music/",
+)
 SKIP_FILES = [
     "*.pyc", "*.pyo", "*.log", "*.db", "*.db-journal", "*.sqlite", "*.sqlite3",
     ".env", "*.spec.bak", "*.mp4", "*.mov", "*.wav", "*.mp3", "*.zip",
@@ -148,7 +153,10 @@ def _skip(relative: Path) -> bool:
     parts = relative.parts
     # data 要单独判：只有渲染环境那几个文件带，其它业务数据不带
     if parts[0] == "data":
-        return "/".join(parts[1:]) not in DATA_KEEP
+        inner = "/".join(parts[1:])
+        if inner in DATA_KEEP or inner.startswith(DATA_KEEP_PREFIX):
+            return False
+        return True
     if parts[0] == "vendor":
         return "/".join(parts[1:]) not in VENDOR_KEEP
     if any(part in SKIP_DIRS for part in parts[:-1]):

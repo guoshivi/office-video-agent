@@ -690,6 +690,12 @@ async function loadSettings() {
   Object.entries(settings).forEach(([key, value]) => {
     if (form.elements[key]) form.elements[key].value = value;
   });
+  // 老库里没有这些键时，下拉框会显示空白；给一个和代码一致的默认值，
+  // 免得看起来像"配置丢了"
+  [["render_engine", "local"], ["local_audio_mode", "mix"], ["render_flower", "1"],
+   ["render_bgm", "1"], ["render_bgm_volume", "0.14"]].forEach(([name, value]) => {
+    if (form.elements[name] && !form.elements[name].value) form.elements[name].value = value;
+  });
   if (form.elements.default_duration) {
     // 默认时长设为 0 表示「默认根据原素材」：选完视频会自动开启跟原片模式
     $("#task-form").elements.target_duration.value = Number(settings.default_duration) > 0 ? settings.default_duration : 45;

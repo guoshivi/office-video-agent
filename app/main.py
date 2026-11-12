@@ -152,6 +152,11 @@ class SettingsUpdate(BaseModel):
     render_engine: str = Field(default="local", max_length=20)
     export_output_root: str = Field(default="", max_length=1000)
     local_audio_mode: str = Field(default="mix", max_length=20)
+    # 本机出片的观感：花字贴片、BGM（曲库在 data/render-env/music）
+    render_flower: str = Field(default="1", max_length=4)
+    render_bgm: str = Field(default="1", max_length=4)
+    render_bgm_mood: str = Field(default="", max_length=12)
+    render_bgm_volume: float = Field(default=0.14, ge=0, le=0.5)
     # 大模型：留空表示不用 AI，文案走规则版
     llm_provider: str = Field(default="", max_length=20)
     llm_api_key: str = Field(default="", max_length=300)
@@ -567,6 +572,7 @@ def read_settings():
 def update_settings(payload: SettingsUpdate):
     values = payload.model_dump()
     values["default_duration"] = str(values["default_duration"])
+    values["render_bgm_volume"] = f"{float(values['render_bgm_volume']):.2f}"
     if values["default_aspect_ratio"] not in {"9:16", "16:9"}:
         raise HTTPException(400, "当前视频工作台支持 9:16 或 16:9")
     if values["workbench_url"] and not values["workbench_url"].startswith(("http://", "https://")):
@@ -575,6 +581,9 @@ def update_settings(payload: SettingsUpdate):
         raise HTTPException(400, "渲染引擎只能是 workbench 或 local")
     if values["local_audio_mode"] not in {"mix", "original", "voice", "mute"}:
         raise HTTPException(400, "本地出片原声只能是 mix / original / voice / mute")
+    for flag in ("render_flower", "render_bgm"):
+        if values[flag] not in {"0", "1"}:
+            raise HTTPException(400, "花字/背景音乐开关只能是 0 或 1")
     if values["llm_provider"] and values["llm_provider"] not in {"ark", "deepseek"}:
         raise HTTPException(400, "模型服务商只支持 ark（豆包）或 deepseek")
     if values["llm_base_url"] and not values["llm_base_url"].startswith(("http://", "https://")):

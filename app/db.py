@@ -250,13 +250,19 @@ DEFAULT_SETTINGS = {
     # 抽帧分镜用的 ffmpeg；留空则自动找 PATH 和工作台自带的那个
     "ffmpeg_path": os.getenv("FFMPEG_PATH", ""),
     "shot_segment_seconds": "6",
-    # 出片观感开关（工作台原生支持，我们只是把默认值定成适合中介发圈的组合）
-    # 贴纸由工作台那边的 LLM 选图标，模型给出不存在的资源名会直接让整条出片失败，
-    # 默认关；确认资源齐全后再开。
+    # 出片引擎：本机是唯一主力，工作台只作为调试留口
+    "render_engine": "local",
+    "local_audio_mode": "mix",
+    # 出片观感开关（花字对本机引擎与工作台引擎都生效）
+    # 本机花字由 Pillow 本地画（app/flower_text.py），不存在模型挑错资源的问题，默认开。
     "render_sticker": os.getenv("OVA_RENDER_STICKER", "0"),
-    "render_flower": os.getenv("OVA_RENDER_FLOWER", "0"),
+    "render_flower": os.getenv("OVA_RENDER_FLOWER", "1"),
     "render_sfx": os.getenv("OVA_RENDER_SFX", "0"),
     "render_sentence_gap": os.getenv("OVA_RENDER_SENTENCE_GAP", "0.22"),
+    # 本机引擎的 BGM：曲库在 data/render-env/music（本机合成，可商用）
+    "render_bgm": os.getenv("OVA_RENDER_BGM", "1"),
+    "render_bgm_mood": os.getenv("OVA_RENDER_BGM_MOOD", ""),   # 留空=按任务稳定随机
+    "render_bgm_volume": os.getenv("OVA_RENDER_BGM_VOLUME", "0.14"),
     # ---- 发布 ----
     # 两个平台默认都关：发布是破坏性动作，必须人工先确认账号和环境就绪再打开。
     "publish_xhs_enabled": os.getenv("PUBLISH_XHS_ENABLED", "0"),
