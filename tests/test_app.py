@@ -69,12 +69,14 @@ def test_full_local_workflow(monkeypatch):
 
         task_response = client.post(
             "/api/tasks",
-            data={"property_id": special["id"], "target_duration": 45, "aspect_ratio": "9:16"},
+            data={"property_id": special["id"], "target_duration": 45, "aspect_ratio": "9:16", "audio_mode": "voice"},
             files={"video": ("tour.mp4", b"fake-video-for-api-test", "video/mp4")},
         )
         assert task_response.status_code == 200, task_response.text
         task = task_response.json()
         assert task["status"] == "script_ready"
+        # 这条任务自己选了"不要原声"，不能被设置里的默认值盖掉
+        assert task["audio_mode"] == "voice"
         assert "内部联系人" not in task["script"]
         assert "钥匙" not in task["script"]
         assert task["warnings"]
@@ -84,6 +86,12 @@ def test_full_local_workflow(monkeypatch):
             json={"script": "这是一条经过人工确认的口播。"},
         )
         assert script_update.status_code == 200
+
+        audio_update = client.put(f"/api/tasks/{task['id']}/audio", json={"audio_mode": "mix"})
+        assert audio_update.status_code == 200
+        assert audio_update.json()["audio_mode"] == "mix"
+        bad_audio = client.put(f"/api/tasks/{task['id']}/audio", json={"audio_mode": "loud"})
+        assert bad_audio.status_code == 400
 
         export = client.post(f"/api/tasks/{task['id']}/export")
         assert export.status_code == 200, export.text

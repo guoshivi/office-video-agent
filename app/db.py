@@ -346,6 +346,8 @@ def init_db() -> None:
         _ensure_column(connection, "tasks", "progress", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(connection, "tasks", "storyboard_json", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(connection, "tasks", "notify_chat_id", "TEXT NOT NULL DEFAULT ''")
+        # 原声去留：空 = 跟设置里的默认值；mix/original/voice/mute = 这条任务单独指定
+        _ensure_column(connection, "tasks", "audio_mode", "TEXT NOT NULL DEFAULT ''")
         for key, value in DEFAULT_SETTINGS.items():
             connection.execute(
                 "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",

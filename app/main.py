@@ -139,6 +139,11 @@ class StatusUpdate(BaseModel):
     error_message: str = Field(default="", max_length=2000)
 
 
+class AudioModeUpdate(BaseModel):
+    # 空字符串 = 跟随设置里的默认值
+    audio_mode: str = Field(default="", max_length=20)
+
+
 class SettingsUpdate(BaseModel):
     public_contact: str = Field(default="", max_length=300)
     # 0 = 新任务默认跟随原素材时长；否则 10–180 秒
@@ -414,11 +419,14 @@ async def create_task(
     voice: str = Form(default="female_warm"),
     style: str = Form(default="professional"),
     script: str = Form(default=""),
+    audio_mode: str = Form(default=""),
 ):
     if not (target_duration == 0 or 10 <= target_duration <= 180):
         raise HTTPException(400, "目标时长需在 10–180 秒之间，或填 0 表示跟随原素材时长")
     if aspect_ratio not in {"9:16", "16:9"}:
         raise HTTPException(400, "当前视频工作台支持 9:16 或 16:9")
+    if audio_mode and audio_mode not in {"mix", "original", "voice", "mute"}:
+        raise HTTPException(400, "原声只能是 保留 / 不要 / 只留原声 / 静音 四种之一")
     with transaction() as connection:
         property_row = connection.execute("SELECT * FROM properties WHERE id=?", (property_id,)).fetchone()
     if property_row is None:
@@ -455,6 +463,7 @@ async def create_task(
             source="webui",
             task_no=task_no,
             script_override=script,
+            audio_mode=audio_mode,
         )
     except Exception:
         shutil.rmtree(task_dir, ignore_errors=True)
@@ -497,6 +506,22 @@ def update_script(task_id: str, payload: ScriptUpdate):
     return serialize_task(get_task(task_id))
 
 
+@app.put("/api/tasks/{task_id}/audio")
+def update_audio_mode(task_id: str, payload: AudioModeUpdate):
+    """这条任务保留不保留原声。空值表示回到设置里的默认。"""
+    mode = payload.audio_mode.strip().lower()
+    if mode and mode not in {"mix", "original", "voice", "mute"}:
+        raise HTTPException(400, "原声只能是 保留 / 不要 / 只留原声 / 静音 四种之一")
+    if get_task(task_id) is None:
+        raise HTTPException(404, "任务不存在")
+    with transaction() as connection:
+        connection.execute(
+            "UPDATE tasks SET audio_mode=?, updated_at=? WHERE id=?",
+            (mode, utc_now(), task_id),
+        )
+    return serialize_task(get_task(task_id))
+
+
 @app.post("/api/tasks/{task_id}/export")
 def export_task(task_id: str):
     try:
@@ -508,7 +533,9 @@ def export_task(task_id: str):
 @app.post("/api/tasks/{task_id}/render", status_code=202)
 def start_render(task_id: str, background_tasks: BackgroundTasks):
     settings = get_settings()
-    if not settings.get("workbench_url"):
+    engine = str(settings.get("render_engine") or "local").strip().lower()
+    # 本地出片不需要工作台，别在最后一步拿"填工作台地址"拦住人
+    if engine != "local" and not settings.get("workbench_url"):
         raise HTTPException(400, "请先在系统设置中填写视频工作台 API 地址")
     with transaction() as connection:
         row = connection.execute("SELECT status, script FROM tasks WHERE id=?", (task_id,)).fetchone()
@@ -519,12 +546,11 @@ def start_render(task_id: str, background_tasks: BackgroundTasks):
         if not row["script"].strip():
             raise HTTPException(400, "口播草稿为空，无法出片")
         connection.execute(
-            """UPDATE tasks SET status='processing', stage='已排队，等待视频工作台',
+            """UPDATE tasks SET status='processing', stage='已排队，准备出片',
                progress=1, error_message='', updated_at=? WHERE id=?""",
             (utc_now(), task_id),
         )
     background_tasks.add_task(render_and_enqueue, task_id)
-    engine = str(get_settings().get("render_engine") or "local").strip().lower()
     message = "已开始出片，在这台电脑上跑，一会儿就能看" if engine != "workbench" else "已提交视频工作台，正在排队处理"
     return {"message": message, "task": serialize_task(get_task(task_id))}
 

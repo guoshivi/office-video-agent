@@ -57,6 +57,46 @@ def test_ass_escapes_braces_so_text_cannot_inject_tags():
     assert "{" not in body.replace(r"{\c&H00D7FF&}", "").replace(r"{\c&HFFFFFF&}", "")
 
 
+def test_long_sentence_becomes_single_line_captions_on_one_timeline():
+    """一句话不再折两行：切成短段，每段一行，按语音时间轴接力出现。"""
+    sentences = [{
+        "text": "面积信息为230平，格局为3隔，可容纳20人办公",
+        "start": 0.0, "end": 9.0, "spoken": 7.5, "label": {},
+    }]
+    ass = build_ass(sentences, (1080, 1920), "Noto Sans SC Black")
+    captions = [line for line in ass.splitlines() if line.startswith("Dialogue:") and ",Cap," in line]
+    assert len(captions) == 3
+    # 一条字幕里不许再出现换行符，屏幕上永远只有一行
+    assert all("\\N" not in line for line in captions)
+    assert captions[0].endswith("面积信息为{\\c&H00D7FF&}230平{\\c&HFFFFFF&}")
+
+    times = [(line.split(",")[1], line.split(",")[2]) for line in captions]
+    assert times[0][0] == "0:00:00.00"
+    # 末段贴着语音结束（spoken 7.5 + 0.45 接住句间空隙），而不是跟着被拉长的画面拖到 9 秒
+    assert times[-1][1] == "0:00:07.95"
+    for previous, following in zip(times, times[1:]):
+        assert previous[1] == following[0]
+
+
+def test_caption_segments_never_exceed_one_line():
+    from app.style_render import CAPTION_MAX_CHARS, caption_segments
+
+    for text in (
+        "整整一面落地窗白天不用开灯采光通透",
+        "这是一套非常罕见的一整层独用办公室，带独立茶水间和露台",
+        "租金3.5元/平/天，物业费另计",
+    ):
+        segments = caption_segments(text)
+        assert max(len(piece) for piece, _ in segments) <= CAPTION_MAX_CHARS
+
+
+def test_decimal_price_is_not_cut_at_the_dot():
+    from app.style_render import caption_segments
+
+    pieces = [piece for piece, _ in caption_segments("租金3.5元/平/天，物业费另计")]
+    assert pieces[0] == "租金3.5元/平/天"
+
+
 # ---------- 体检说人话 ----------
 
 @pytest.fixture(autouse=True)

@@ -54,7 +54,9 @@ FONT_FALLBACK = Path(r"C:\Windows\Fonts\msyhbd.ttc")
 
 TTS_VOICE = "zh-CN-XiaoxiaoNeural"
 TTS_RATE = "+10%"          # 中介口播普遍偏快，慢了反而假
-CAPTION_SIZE = 66
+# 1080 宽实测：字号 × 0.69 ≈ 单字宽度。120 号字一行 10 个汉字占画面约 78%，
+# 字高 79px（1920 高的 4%），手机上抬眼就能看清。
+CAPTION_SIZE = 120
 CAPTION_BORDER = 6
 CAPTION_MARGIN_V = 260      # 字幕距画面底边的距离（1080x1920 画布）
 LABEL_SIZE = 78
@@ -259,8 +261,98 @@ def _ass_time(seconds: float) -> str:
     return f"{hours}:{minutes:02d}:{secs:05.2f}"
 
 
+# ------------------------------------------------------------------ 字幕分段
+#
+# 一条字幕铺满屏幕两行是最难看的：字号得缩、还得上下跳。中介刷到的爆款
+# 全是「一行、按语速一句一句换」。所以一句话不再折行，而是切成若干短段，
+# 每段单行、在自己那一小段时间里出现，念到哪显示到哪。
+
+CAPTION_MAX_CHARS = 10      # 120 号字一行 10 个汉字，左右各留一百多像素，不出血
+
+# 段尾停顿标点：切在这里最自然；字幕里不显示，读起来更干净
+_CAPTION_BREAK = "，。！？；：、,.!?;:"
+_CAPTION_TRIM = "，。、；：,.、;:"
+# 量词结尾处断开，别把「230平」拆成「230 / 平」
+_MEASURE_TAIL = "平㎡元万层隔年号个位套间月天"
+
+
+def _soft_cut(piece: str, limit: int) -> int:
+    """超长段硬切的落点：优先切在量词后面，切不到才按字数切。"""
+    lowest = max(4, limit - 4)
+    for cut in range(limit, lowest, -1):
+        if cut < len(piece) and piece[cut - 1] in _MEASURE_TAIL:
+            return cut
+    return limit
+
+
+def caption_segments(text: str, max_chars: int = CAPTION_MAX_CHARS) -> list[tuple[str, float]]:
+    """把一句话切成单行字幕段，返回 [(文字, 时长权重)]。
+
+    权重 ≈ 字数，段尾有停顿标点的多算一点，因为 TTS 会在那里顿一下。
+    """
+    raw: list[tuple[str, bool]] = []
+    buffer = ""
+    content = str(text or "").strip()
+    for index, char in enumerate(content):
+        buffer += char
+        if char not in _CAPTION_BREAK:
+            continue
+        # 「3.5 元」「1,200」里的小数点和千分位不是句子结束，别切在这里
+        if char in ".," and (
+            (index + 1 < len(content) and content[index + 1].isdigit())
+            or (index > 0 and content[index - 1].isdigit())
+        ):
+            continue
+        if len(buffer.strip(_CAPTION_TRIM)) >= 2:
+            raw.append((buffer, True))
+            buffer = ""
+    if buffer.strip():
+        raw.append((buffer, False))
+
+    segments: list[tuple[str, bool]] = []
+    for piece, pause in raw:
+        piece = piece.strip().rstrip(_CAPTION_TRIM)
+        if not piece:
+            continue
+        while len(piece) > max_chars:
+            # 只超一点就对半分，别切出「12 字 + 2 字」的小尾巴
+            cut = (len(piece) + 1) // 2 if len(piece) <= max_chars + 4 else _soft_cut(piece, max_chars)
+            segments.append((piece[:cut].rstrip(_CAPTION_TRIM), False))
+            piece = piece[cut:].lstrip(_CAPTION_TRIM)
+        if piece:
+            segments.append((piece, pause))
+
+    # 太短的尾巴（「平」「另外」）并到前面，别让字幕一闪就换
+    merged: list[tuple[str, bool]] = []
+    for piece, pause in segments:
+        if merged and len(piece) <= 2 and len(merged[-1][0]) + len(piece) <= max_chars:
+            merged[-1] = (merged[-1][0] + piece, pause)
+        else:
+            merged.append((piece, pause))
+    return [(piece, len(piece) + (1.2 if pause else 0.0)) for piece, pause in merged]
+
+
+def segment_times(start: float, end: float, weights: list[float]) -> list[tuple[float, float]]:
+    """把一句话的时间窗按权重切开，段与段首尾相接、不留缝。"""
+    total = sum(weights) or float(len(weights) or 1)
+    span = max(float(end) - float(start), 0.0)
+    times: list[tuple[float, float]] = []
+    cursor = float(start)
+    for weight in weights:
+        step = span * (weight / total)
+        times.append((round(cursor, 2), round(cursor + step, 2)))
+        cursor += step
+    if times:
+        times[-1] = (times[-1][0], round(float(end), 2))
+    return times
+
+
 def build_ass(sentences: list[dict], canvas: tuple[int, int], font_name: str) -> str:
-    """把分镜写成一份 ASS 字幕文件。一句话一条 Dialogue。"""
+    """把分镜写成一份 ASS 字幕文件。
+
+    一句话切成若干单行字幕段，一段一条 Dialogue，按语音时间轴依次出现：
+    念到哪显示到哪，屏幕上始终只有一行字。
+    """
     width, height = canvas
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -279,23 +371,33 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     lines = []
     for sentence in sentences:
-        start = _ass_time(sentence["start"])
-        end = _ass_time(sentence["end"])
+        start = float(sentence["start"])
+        end = float(sentence["end"])
         # 【词】手动标记优先，其次 AI 挑的词，都没有才走正则
         clean, inline_marks = parse_marks(sentence["text"])
         words = tuple(sentence.get("marks") or inline_marks or ())
         if not words:
             words = tuple(w for w in (sentence.get("highlights") or []) if w in clean)
-        # 先按标点折行，再逐行上色：跨行的词不会被拆成半个颜色
-        wrapped = _wrap(clean).split("\n")
-        text = r"\N".join(_highlight(line, marks=tuple(w for w in words if w in line)) for line in wrapped)
-        lines.append(f"Dialogue: 0,{start},{end},Cap,,0,0,0,,{text}")
+        segments = caption_segments(clean)
+        if segments:
+            # 有真实语音时长就贴着语音走：目标时长会把画面拉长，字幕不能跟着拖，
+            # 否则念完半分钟了字还在屏幕上慢慢挪。
+            spoken = float(sentence.get("spoken") or 0.0)
+            # +0.45 是为了接住句间那点空隙：字幕刚消失下一句才起，会闪一下空白
+            speech_end = min(end, start + spoken + 0.45) if spoken > 0 else end
+            for (piece, _weight), (seg_start, seg_end) in zip(
+                segments, segment_times(start, speech_end, [w for _, w in segments])
+            ):
+                body = _highlight(piece, marks=tuple(w for w in words if w in piece))
+                lines.append(
+                    f"Dialogue: 0,{_ass_time(seg_start)},{_ass_time(seg_end)},Cap,,0,0,0,,{body}"
+                )
         label = sentence.get("label") or {}
         if label.get("title"):
             title = _ass_text(label["title"])
             sub = _ass_text(label.get("sub") or "")
             body = f"{title}\\N{sub}" if sub else title
-            lines.append(f"Dialogue: 0,{start},{end},Label,,0,0,0,,{body}")
+            lines.append(f"Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Label,,0,0,0,,{body}")
     return header + "\n".join(lines) + "\n"
 
 
@@ -930,7 +1032,13 @@ def render_task_locally(task_row) -> Path:
         raise RenderError(f"任务原始视频不存在：{source}")
 
     voice, rate = _VOICE_MAP.get(str(task_row["voice"] or ""), _VOICE_MAP["female_warm"])
-    audio_mode = str(settings.get("local_audio_mode") or "mix").strip().lower()
+    # 这条任务自己选过原声就听它的，没选才回到设置里的默认值
+    task_audio = ""
+    try:
+        task_audio = str(task_row["audio_mode"] or "").strip().lower()
+    except (IndexError, KeyError):
+        task_audio = ""
+    audio_mode = task_audio if task_audio in AUDIO_MODES else str(settings.get("local_audio_mode") or "mix").strip().lower()
     if audio_mode not in AUDIO_MODES:
         audio_mode = "mix"
     canvas = (CANVAS_WIDE_W, CANVAS_WIDE_H) if task_row["aspect_ratio"] == "16:9" else (CANVAS_W, CANVAS_H)
@@ -970,7 +1078,7 @@ def render_task_locally(task_row) -> Path:
         music_path=visual["music_path"],
         music_volume=visual["music_volume"],
     )
-    logger.info("本地出片完成：%s（%.1fs）", out, time.time() - started)
+    logger.info("本地出片完成：%s（原声=%s，%.1fs）", out, audio_mode, time.time() - started)
 
     # 用户自己设定的出品目录：成片再复制一份过去，方便直接取用
     export_root = str(settings.get("export_output_root") or "").strip()

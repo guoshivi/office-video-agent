@@ -213,12 +213,12 @@
               <label>默认声音<select name="default_voice"><option value="female_warm">温暖女声</option><option value="male_professional">专业男声</option></select></label>
               <div class="settings-group">
                 <p class="settings-group-title">出片</p>
-                <label>本地出片原声<select name="local_audio_mode">
-                  <option value="mix">原声压低 + 口播</option>
-                  <option value="original">只保留原声</option>
-                  <option value="voice">只要口播</option>
-                  <option value="mute">无声</option>
-                </select></label>
+                <label>默认原声<select name="local_audio_mode">
+                  <option value="mix">保留原声（压低垫在口播下）</option>
+                  <option value="voice">不要原声（只有口播 + 音乐）</option>
+                  <option value="original">只要原声（不配口播）</option>
+                  <option value="mute">完全静音</option>
+                </select><small>新建任务时还能单独改这一条。现场安静、有钥匙声脚步声就保留，能加分。</small></label>
                 <div class="form-row">
                   <label>花字贴片<select name="render_flower">
                     <option value="1">开（推荐，卖点数字上大字）</option>
@@ -244,7 +244,7 @@
                   </select></label>
                   <label>BGM 音量<input name="render_bgm_volume" type="number" min="0" max="0.5" step="0.01" placeholder="0.14"><small>0.14 是口播不被压住的上限附近；觉得听不见就调到 0.2。</small></label>
                 </div>
-                <p class="section-note">出片、配音、字幕、花字、BGM 都在这台电脑上完成，不需要另一台机器配合。字幕里写【拎包入驻】这样的方括号词，会被当成重点词变金色，并挑一处做大字花字。</p>
+                <p class="section-note">出片、配音、字幕、花字、BGM 都在这台电脑上完成，不需要另一台机器配合。字幕一律单行，长句会按标点和语速切成几段依次出，不折两行。字幕里写【拎包入驻】这样的方括号词，会被当成重点词变金色，并挑一处做大字花字。</p>
                 <details class="settings-more">
                   <summary>改用远程视频工作台（一般不用动）</summary>
                   <label>视频工作台 API 地址<input name="workbench_url" placeholder="http://192.168.x.x:8765"></label>
@@ -332,6 +332,13 @@
         <div class="form-field">目标时长（秒）<span class="duration-row"><input name="target_duration" id="target-duration" type="number" min="10" max="180" value="45"><button type="button" class="duration-use-source" id="use-source-duration" disabled title="先选视频，再点这里开启「根据原素材」模式">跟原片</button></span></div>
         <label>视频比例<select name="aspect_ratio"><option>9:16</option><option>16:9</option></select></label>
         <label>声音<select name="voice"><option value="female_warm">温暖女声</option><option value="male_professional">专业男声</option></select></label>
+        <label>原声<select name="audio_mode">
+          <option value="">跟设置里的默认</option>
+          <option value="mix">保留原声（压低垫在口播下）</option>
+          <option value="voice">不要原声（只有口播 + 音乐）</option>
+          <option value="original">只要原声（不配口播）</option>
+          <option value="mute">完全静音</option>
+        </select><small>实拍现场有环境音就保留，嘈杂就关掉。</small></label>
         <label>风格<select name="style"><option value="professional">专业简洁</option><option value="warm">自然亲和</option></select></label>
         <div class="form-field full copy-field">
           <div class="copy-head">
@@ -343,7 +350,7 @@
             </span>
           </div>
           <textarea name="script" id="task-script" rows="7" placeholder="留空 = 按房源字段自动生成；也可以自己写，或点「AI 生成」写一版再改"></textarea>
-          <small>一句话一行，出片时一句配一个镜头、一句一条字幕。留空就用系统规则版。</small>
+          <small>一句话一行，出片时一句配一个镜头。字幕会自动切成单行短句，跟着语速一段段换。</small>
         </div>
       </div>
       <div class="notice">提交后会生成可编辑的口播草稿。真实配音与成片由视频工作台完成。</div>
@@ -405,6 +412,12 @@
         </div>
         <div class="detail-side">
           <label class="detail-script-field"><span>口播草稿</span><textarea id="detail-script" rows="12"></textarea></label>
+          <label class="detail-audio-field"><span>原声</span><select id="detail-audio-mode">
+            <option value="mix">保留原声（压低垫在口播下）</option>
+            <option value="voice">不要原声（只有口播 + 音乐）</option>
+            <option value="original">只要原声（不配口播）</option>
+            <option value="mute">完全静音</option>
+          </select><small>改完点下面的出片按钮才生效。</small></label>
           <div class="render-state" id="render-status">尚未提交真实出片</div>
           <div class="detail-actions"><button class="button button-ghost" id="save-script">保存草稿</button><button class="button button-ghost" id="export-task">导出任务包</button><button class="button button-primary" id="render-task">提交真实出片</button><a class="button button-lime hidden" id="detail-output" href="#" download>下载成片</a></div>
         </div>

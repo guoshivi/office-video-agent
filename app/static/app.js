@@ -1008,6 +1008,8 @@ function applyTaskDetail(task, initial = true) {
     $("#detail-number").textContent = task.task_no;
     $("#detail-title").textContent = task.property_label || "视频任务";
     $("#detail-script").value = task.script;
+    // 任务没单独选过就显示设置里的默认值，避免下拉空白
+    $("#detail-audio-mode").value = task.audio_mode || state.settings.local_audio_mode || "mix";
     $("#detail-warnings").innerHTML = task.warnings.map((warning) => `<div class="warning-item">${escapeHtml(warning)}</div>`).join("");
     $("#export-result").classList.add("hidden");
     $("#export-task").textContent = task.workbench_package_path ? "重新导出任务包" : "导出任务包";
@@ -1282,6 +1284,13 @@ $("#render-task").addEventListener("click", async () => {
       method: "PUT", body: JSON.stringify({ script: $("#detail-script").value }),
     });
     applyTaskDetail(updated, false);
+    // 先把这条任务的原声选择落库，再出片：出片读的是任务上的值
+    const audioMode = $("#detail-audio-mode").value;
+    if (audioMode !== (state.currentTask.audio_mode || "")) {
+      await api(`/api/tasks/${state.currentTask.id}/audio`, {
+        method: "PUT", body: JSON.stringify({ audio_mode: audioMode }),
+      });
+    }
     const result = await api(`/api/tasks/${state.currentTask.id}/render`, { method: "POST" });
     applyTaskDetail(result.task, false);
     toast("已提交视频工作台");

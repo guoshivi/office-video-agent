@@ -356,11 +356,13 @@ def create_task_record(
     notify_chat_id: str = "",
     task_no: str = "",
     script_override: str = "",
+    audio_mode: str = "",
 ) -> str:
     """WebUI 与飞书共用的唯一建任务入口，避免两个入口各写一套状态机。
 
     script_override 不为空时表示用户自己写了文案（或让 AI 写好再改过），
     直接用它，不再按字段重新生成。
+    audio_mode 空表示跟设置；填了就是这条任务的原声处理方式。
     """
     custom = (script_override or "").strip()
     if custom:
@@ -375,12 +377,13 @@ def create_task_record(
             """INSERT INTO tasks(
                 id, task_no, property_id, source, original_filename, source_video_path,
                 target_duration, aspect_ratio, voice, style, script, warnings_json,
-                status, notify_chat_id, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'script_ready', ?, ?, ?)""",
+                status, notify_chat_id, audio_mode, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'script_ready', ?, ?, ?, ?)""",
             (
                 task_id, task_no or new_task_no(), property_row["id"], source,
                 original_filename, str(video_path), target_duration, aspect_ratio,
-                voice, style, script, json_dumps(warnings), notify_chat_id, now, now,
+                voice, style, script, json_dumps(warnings), notify_chat_id,
+                (audio_mode or "").strip().lower(), now, now,
             ),
         )
     return task_id
@@ -490,6 +493,7 @@ def serialize_task(row, include_script: bool = True) -> dict:
         "target_duration": row["target_duration"],
         "aspect_ratio": row["aspect_ratio"],
         "voice": row["voice"],
+        "audio_mode": row["audio_mode"] if "audio_mode" in row.keys() else "",
         "style": row["style"],
         "status": row["status"],
         "stage": row["stage"],
