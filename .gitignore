@@ -5,6 +5,10 @@ __pycache__/
 .env
 data/*
 !data/.gitkeep
+# 渲染字体与图标是程序资产（不是运行数据），要跟着仓库走，
+# 否则新机器 clone 下来出片会因为找不到字体直接失败
+!data/render-env/
+!data/render-env/**
 *.db
 *.sqlite3
 logs/
