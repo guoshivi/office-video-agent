@@ -1961,3 +1961,45 @@ kbd {
   color: var(--text);
   font-size: 12px;
 }
+
+/* -------------------------------------------------- 任务级观感：折叠区
+   新建和详情都用这一块。「跟设置」是默认，展开才占高度——不调的人
+   一辈子不用展开它，要调的人当场就能调。 */
+.form-extra {
+  grid-column: 1 / -1;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.form-extra > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--text-2);
+  list-style: none;
+}
+.form-extra > summary::-webkit-details-marker { display: none; }
+.form-extra > summary::before { content: "▸"; color: var(--text-3); font-size: 10px; }
+.form-extra[open] > summary::before { content: "▾"; }
+.form-extra > summary em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.form-extra[open] > summary { margin-bottom: 11px; }
+.form-extra .form-row + .form-row { margin-top: 10px; }
+.form-extra .form-row label { font-size: 12px; }
+.form-extra-note {
+  margin: 10px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+/* 详情侧栏里这块不参与 grid，宽度得自己撑满，控件也比弹窗里矮一点 */
+.detail-extra { grid-column: auto; margin-top: 2px; }
+.detail-extra .form-row label { display: grid; gap: 5px; font-size: 12px; color: var(--text-2); }
+.detail-extra select { height: 34px; }

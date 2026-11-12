@@ -514,6 +514,38 @@
           <textarea name="script" id="task-script" rows="5" placeholder="留空 = 按房源字段自动生成；也可以自己写，或点「出三版」挑一个开头再改"></textarea>
           <small><em id="copy-model-hint"></em>一句话一行，出片时一句配一个镜头。字幕会自动切成单行短句，跟着语速一段段换。</small>
         </div>
+        <details class="form-extra" id="task-render-options">
+          <summary>画面与字幕<em id="render-defaults-hint"></em></summary>
+          <div class="form-row">
+            <label>字幕大小<select name="subtitle_size">
+              <option value="">跟设置里的大小</option>
+              <option value="small">小（一行 12 字）</option>
+              <option value="medium">中（一行 11 字）</option>
+              <option value="large">大（一行 9 字，竖屏推荐）</option>
+            </select></label>
+            <label>字幕位置<select name="subtitle_bottom">
+              <option value="">跟设置里的位置</option>
+              <option value="high">靠上（离底 380）</option>
+              <option value="middle">居中（离底 260）</option>
+              <option value="low">靠下（离底 170）</option>
+            </select></label>
+          </div>
+          <div class="form-row">
+            <label>语速<select name="tts_rate">
+              <option value="">跟设置里的语速</option>
+              <option value="-8%">慢一点（-8%）</option>
+              <option value="+0%">正常</option>
+              <option value="+8%">快一点（+8%）</option>
+              <option value="+16%">很快（+16%）</option>
+            </select></label>
+            <label>画面花字<select name="flower">
+              <option value="">跟设置</option>
+              <option value="1">开（面积租金弹字）</option>
+              <option value="0">关（画面干净）</option>
+            </select></label>
+          </div>
+          <p class="form-extra-note">只对你这一条视频生效，不动系统设置。BGM、运镜、花字风格和密度这类一次调好就不改的，去系统设置里统一改。</p>
+        </details>
       </div>
       <div class="notice">提交后会生成可编辑的口播草稿。真实配音与成片由视频工作台完成。</div>
       <div class="dialog-actions"><button type="button" class="button button-ghost" data-close="task-dialog">取消</button><button class="button button-primary" type="submit">上传并创建草稿</button></div>
@@ -594,6 +626,38 @@
             <option value="original">只要原声（不配口播）</option>
             <option value="mute">完全静音</option>
           </select><small>改完点下面的出片按钮才生效。</small></label>
+          <details class="form-extra detail-extra" id="detail-render-options">
+            <summary>画面与字幕<em id="detail-defaults-hint"></em></summary>
+            <div class="form-row">
+              <label>字幕大小<select id="detail-subtitle-size">
+                <option value="">跟设置</option>
+                <option value="small">小</option>
+                <option value="medium">中</option>
+                <option value="large">大</option>
+              </select></label>
+              <label>字幕位置<select id="detail-subtitle-bottom">
+                <option value="">跟设置</option>
+                <option value="high">靠上</option>
+                <option value="middle">居中</option>
+                <option value="low">靠下</option>
+              </select></label>
+            </div>
+            <div class="form-row">
+              <label>语速<select id="detail-tts-rate">
+                <option value="">跟设置</option>
+                <option value="-8%">慢一点</option>
+                <option value="+0%">正常</option>
+                <option value="+8%">快一点</option>
+                <option value="+16%">很快</option>
+              </select></label>
+              <label>画面花字<select id="detail-flower">
+                <option value="">跟设置</option>
+                <option value="1">开</option>
+                <option value="0">关</option>
+              </select></label>
+            </div>
+            <p class="form-extra-note">改完点「提交真实出片」生效。</p>
+          </details>
           <div class="render-state" id="render-status">尚未提交真实出片</div>
           <div class="detail-actions"><button class="button button-ghost" id="save-script">保存草稿</button><button class="button button-ghost" id="export-task">导出任务包</button><button class="button button-primary" id="render-task">提交真实出片</button><a class="button button-lime hidden" id="detail-output" href="#" download>下载成片</a></div>
         </div>

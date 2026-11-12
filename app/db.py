@@ -371,6 +371,13 @@ def init_db() -> None:
         _ensure_column(connection, "tasks", "notify_chat_id", "TEXT NOT NULL DEFAULT ''")
         # 原声去留：空 = 跟设置里的默认值；mix/original/voice/mute = 这条任务单独指定
         _ensure_column(connection, "tasks", "audio_mode", "TEXT NOT NULL DEFAULT ''")
+        # 下面四列同一条规则：空 = 跟系统设置；有值 = 只对这一条任务生效。
+        # 竖屏和横屏要的字号不一样，长文案要的语速不一样，逐条视频真的会变的那几项
+        # 才提到任务上；BGM、运镜、花字风格这类一次调好就不动的，留在设置里。
+        _ensure_column(connection, "tasks", "subtitle_size", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(connection, "tasks", "subtitle_bottom", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(connection, "tasks", "tts_rate", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(connection, "tasks", "flower", "TEXT NOT NULL DEFAULT ''")
         for key, value in DEFAULT_SETTINGS.items():
             connection.execute(
                 "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",

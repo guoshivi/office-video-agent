@@ -1078,11 +1078,25 @@ def _flag(settings: dict, key: str, default: str = "1") -> bool:
     return value not in {"0", "false", "no", "off"}
 
 
-def _local_audio_visual_settings(task_key: str) -> dict:
-    """从系统设置读本机出片的观感参数，供 render_storyboard 用。
+def _task_value(task_row, key: str) -> str:
+    """读任务级覆盖值。老库里没这列、或者填的是空串，都返回空让设置兜底。"""
+    if task_row is None:
+        return ""
+    try:
+        return str(task_row[key] or "").strip()
+    except (IndexError, KeyError, TypeError):
+        return ""
+
+
+def _local_audio_visual_settings(task_key: str, task_row=None) -> dict:
+    """读本机出片的观感参数，供 render_storyboard 用。
 
     对应工作台右侧那几组页签：花字 / 音乐 / 字幕 / 配音。值都做了兜底，
     老库里没有这些键也能正常出片。
+
+    分两层：系统设置是默认值，任务上的 subtitle_size / subtitle_bottom /
+    tts_rate / flower 是这条视频的例外。竖屏字号要更大、长文案语速要更快，
+    这类差异逐条存在任务上，不值得让人每次先跑去设置里改一遍再改回来。
     """
     settings = get_settings()
     music_path = None
@@ -1096,14 +1110,27 @@ def _local_audio_visual_settings(task_key: str) -> dict:
     except ValueError:
         volume = 0.14
 
-    size_key = str(settings.get("render_subtitle_size") or "medium").strip()
-    bottom_key = str(settings.get("render_subtitle_bottom") or "middle").strip()
+    size_key = _task_value(task_row, "subtitle_size") or str(
+        settings.get("render_subtitle_size") or "medium"
+    ).strip()
+    bottom_key = _task_value(task_row, "subtitle_bottom") or str(
+        settings.get("render_subtitle_bottom") or "middle"
+    ).strip()
     density_key = str(settings.get("render_flower_density") or "normal").strip()
     flower_style = str(settings.get("render_flower_style") or "auto").strip() or "auto"
     source = str(settings.get("render_highlight_source") or "ai").strip()
 
+    # 花字开关：任务上写了 0/1 就听任务的，否则听设置
+    task_flower = _task_value(task_row, "flower")
+    if task_flower == "1":
+        flower_on = True
+    elif task_flower == "0":
+        flower_on = False
+    else:
+        flower_on = _flag(settings, "render_flower")
+
     return {
-        "flower": _flag(settings, "render_flower"),
+        "flower": flower_on,
         "flower_density": FLOWER_DENSITY_CHOICES.get(density_key, 3),
         "flower_style": flower_style,
         "music_path": music_path,
@@ -1113,7 +1140,7 @@ def _local_audio_visual_settings(task_key: str) -> dict:
         "caption_highlight": _flag(settings, "render_subtitle_highlight"),
         "highlight_source": source if source in {"ai", "rules", "manual"} else "ai",
         "kenburns": _flag(settings, "render_kenburns"),
-        "tts_rate": str(settings.get("render_tts_rate") or "").strip(),
+        "tts_rate": _task_value(task_row, "tts_rate") or str(settings.get("render_tts_rate") or "").strip(),
         # 正则兜底：只有「手动【】」不需要
         "caption_highlight_regex": source != "manual",
     }
@@ -1148,8 +1175,8 @@ def render_task_locally(task_row) -> Path:
         audio_mode = "mix"
     canvas = (CANVAS_WIDE_W, CANVAS_WIDE_H) if task_row["aspect_ratio"] == "16:9" else (CANVAS_W, CANVAS_H)
 
-    visual = _local_audio_visual_settings(str(task_row["task_no"]))
-    # 语速：设置里选了就覆盖音色自带的那个
+    visual = _local_audio_visual_settings(str(task_row["task_no"]), task_row)
+    # 语速：任务上选了听任务的，否则听设置里那个，再否则用音色自带
     if visual.get("tts_rate"):
         rate = visual["tts_rate"]
 

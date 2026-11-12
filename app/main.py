@@ -37,6 +37,7 @@ from .services import (
     new_task_no,
     public_property,
     serialize_task,
+    set_task_render_options,
     set_task_script,
 )
 from .workbench_client import render_task, workbench_status
@@ -525,6 +526,10 @@ async def create_task(
     style: str = Form(default="professional"),
     script: str = Form(default=""),
     audio_mode: str = Form(default=""),
+    subtitle_size: str = Form(default=""),
+    subtitle_bottom: str = Form(default=""),
+    tts_rate: str = Form(default=""),
+    flower: str = Form(default=""),
 ):
     if not (target_duration == 0 or 10 <= target_duration <= 180):
         raise HTTPException(400, "目标时长需在 10–180 秒之间，或填 0 表示跟随原素材时长")
@@ -569,6 +574,10 @@ async def create_task(
             task_no=task_no,
             script_override=script,
             audio_mode=audio_mode,
+            subtitle_size=subtitle_size,
+            subtitle_bottom=subtitle_bottom,
+            tts_rate=tts_rate,
+            flower=flower,
         )
     except Exception:
         shutil.rmtree(task_dir, ignore_errors=True)
@@ -648,6 +657,30 @@ def update_audio_mode(task_id: str, payload: AudioModeUpdate):
             "UPDATE tasks SET audio_mode=?, updated_at=? WHERE id=?",
             (mode, utc_now(), task_id),
         )
+    return serialize_task(get_task(task_id))
+
+
+class RenderOptionsUpdate(BaseModel):
+    """这条视频自己的观感选择。字段留空 = 跟系统设置。"""
+
+    subtitle_size: str = Field(default="", max_length=12)
+    subtitle_bottom: str = Field(default="", max_length=12)
+    tts_rate: str = Field(default="", max_length=12)
+    flower: str = Field(default="", max_length=2)
+
+
+@app.put("/api/tasks/{task_id}/render-options")
+def update_render_options(task_id: str, payload: RenderOptionsUpdate):
+    if get_task(task_id) is None:
+        raise HTTPException(404, "任务不存在")
+    if set_task_render_options(
+        task_id,
+        subtitle_size=payload.subtitle_size,
+        subtitle_bottom=payload.subtitle_bottom,
+        tts_rate=payload.tts_rate,
+        flower=payload.flower,
+    ) is False:
+        raise HTTPException(404, "任务不存在")
     return serialize_task(get_task(task_id))
 
 

@@ -823,7 +823,35 @@ function openAdvancedTask() {
   resetDurationField();
   // 人群下拉要在弹窗打开时就有选项，不能等点了「出三版」才填
   ensureAudienceOptions().catch(() => {});
+  resetRenderOptions();
   openDialog("task-dialog");
+}
+
+// 每次新开一张单，观感项都退回「跟设置」，免得上一单的选择被悄悄带过来
+function resetRenderOptions() {
+  ["subtitle_size", "subtitle_bottom", "tts_rate", "flower"].forEach((name) => {
+    const field = $(`#task-form [name="${name}"]`);
+    if (field) field.value = "";
+  });
+  const box = $("#task-render-options");
+  if (box) box.open = false;
+  renderOptionHints();
+}
+
+// 「跟设置」到底是哪个值，写在折叠条上，省得每次回去翻设置页
+function renderOptionHints(selector = "#render-defaults-hint") {
+  const hint = $(selector);
+  if (!hint) return;
+  const settings = state.settings || {};
+  const size = { small: "小", medium: "中", large: "大" }[settings.render_subtitle_size] || "中";
+  const where = { high: "靠上", middle: "居中", low: "靠下" }[settings.render_subtitle_bottom] || "居中";
+  const rate = (settings.render_tts_rate || "").trim() || "默认";
+  const flower = String(settings.render_flower ?? "1") === "1" ? "开" : "关";
+  hint.textContent = `当前：${size}字 · ${where} · 语速${rate} · 花字${flower}`;
+}
+
+function renderDetailHints() {
+  renderOptionHints("#detail-defaults-hint");
 }
 
 /* ------------------------------------------------------------------ 快速出片 */
@@ -1037,6 +1065,18 @@ function applyTaskDetail(task, initial = true) {
     $("#detail-script").value = task.script;
     // 任务没单独选过就显示设置里的默认值，避免下拉空白
     $("#detail-audio-mode").value = task.audio_mode || state.settings.local_audio_mode || "mix";
+    // 观感四项反过来：没单独选过就显示「跟设置」，不假装是某个具体值
+    const renderFields = {
+      "#detail-subtitle-size": task.subtitle_size,
+      "#detail-subtitle-bottom": task.subtitle_bottom,
+      "#detail-tts-rate": task.tts_rate,
+      "#detail-flower": task.flower,
+    };
+    Object.entries(renderFields).forEach(([selector, value]) => {
+      const field = $(selector);
+      if (field) field.value = value || "";
+    });
+    renderDetailHints();
     $("#detail-warnings").innerHTML = task.warnings.map((warning) => `<div class="warning-item">${escapeHtml(warning)}</div>`).join("");
     // 换一个任务，上一套三版就不该还挂在这儿
     const versions = $("#detail-versions");
@@ -1332,6 +1372,14 @@ async function polishCopy() {
 
 $("#btn-task-versions")?.addEventListener("click", loadTaskVersions);
 $("#btn-polish-copy")?.addEventListener("click", polishCopy);
+// 点开折叠区时把它拉进视野：新建弹窗里它在文案框下面，不滚一下
+// 用户会以为点了没反应
+["#task-render-options", "#detail-render-options"].forEach((selector) => {
+  const box = $(selector);
+  box?.addEventListener("toggle", () => {
+    if (box.open) box.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  });
+});
 // 换房源后上一套的开头就作废了，留着会被误点
 $("#task-property")?.addEventListener("change", () => {
   const box = $("#task-versions");
@@ -1457,6 +1505,21 @@ $("#render-task").addEventListener("click", async () => {
     if (audioMode !== effective) {
       await api(`/api/tasks/${state.currentTask.id}/audio`, {
         method: "PUT", body: JSON.stringify({ audio_mode: audioMode }),
+      });
+    }
+    // 画面与字幕同理：改了才写库，没改不动，免得把「跟设置」写成死值
+    const options = {
+      subtitle_size: $("#detail-subtitle-size")?.value || "",
+      subtitle_bottom: $("#detail-subtitle-bottom")?.value || "",
+      tts_rate: $("#detail-tts-rate")?.value || "",
+      flower: $("#detail-flower")?.value || "",
+    };
+    const before = state.currentTask;
+    const changed = ["subtitle_size", "subtitle_bottom", "tts_rate", "flower"]
+      .some((key) => options[key] !== (before[key] || ""));
+    if (changed) {
+      await api(`/api/tasks/${state.currentTask.id}/render-options`, {
+        method: "PUT", body: JSON.stringify(options),
       });
     }
     const result = await api(`/api/tasks/${state.currentTask.id}/render`, { method: "POST" });

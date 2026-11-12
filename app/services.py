@@ -343,6 +343,19 @@ def new_task_no() -> str:
     return f"V{datetime.now():%Y%m%d}-{suffix}"
 
 
+# 任务级观感参数的合法取值。空字符串统一表示「跟系统设置」，所以不在这些集合里。
+RENDER_OPTION_VALUES = {
+    "subtitle_size": {"small", "medium", "large"},
+    "subtitle_bottom": {"high", "middle", "low"},
+}
+
+
+def _pick(value: str, allowed: set[str]) -> str:
+    """收任务级覆盖值：不认识的直接当没填，交给设置兜底，不把脏值写进库。"""
+    text = (value or "").strip()
+    return text if text in allowed else ""
+
+
 def create_task_record(
     *,
     property_row,
@@ -357,12 +370,17 @@ def create_task_record(
     task_no: str = "",
     script_override: str = "",
     audio_mode: str = "",
+    subtitle_size: str = "",
+    subtitle_bottom: str = "",
+    tts_rate: str = "",
+    flower: str = "",
 ) -> str:
     """WebUI 与飞书共用的唯一建任务入口，避免两个入口各写一套状态机。
 
     script_override 不为空时表示用户自己写了文案（或让 AI 写好再改过），
     直接用它，不再按字段重新生成。
-    audio_mode 空表示跟设置；填了就是这条任务的原声处理方式。
+    audio_mode / subtitle_size / subtitle_bottom / tts_rate / flower 空表示
+    跟系统设置，填了就是这条任务自己的选择。
     """
     custom = (script_override or "").strip()
     if custom:
@@ -377,13 +395,19 @@ def create_task_record(
             """INSERT INTO tasks(
                 id, task_no, property_id, source, original_filename, source_video_path,
                 target_duration, aspect_ratio, voice, style, script, warnings_json,
-                status, notify_chat_id, audio_mode, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'script_ready', ?, ?, ?, ?)""",
+                status, notify_chat_id, audio_mode, subtitle_size, subtitle_bottom,
+                tts_rate, flower, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'script_ready', ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 task_id, task_no or new_task_no(), property_row["id"], source,
                 original_filename, str(video_path), target_duration, aspect_ratio,
                 voice, style, script, json_dumps(warnings), notify_chat_id,
-                (audio_mode or "").strip().lower(), now, now,
+                (audio_mode or "").strip().lower(),
+                _pick(subtitle_size, RENDER_OPTION_VALUES["subtitle_size"]),
+                _pick(subtitle_bottom, RENDER_OPTION_VALUES["subtitle_bottom"]),
+                (tts_rate or "").strip(),
+                _pick(flower, {"0", "1"}),
+                now, now,
             ),
         )
     return task_id
@@ -398,6 +422,34 @@ def set_task_script(task_id: str, script: str) -> bool:
             """UPDATE tasks SET script=?, status='script_ready',
                workbench_package_path='', updated_at=? WHERE id=?""",
             (script, utc_now(), task_id),
+        )
+        return cursor.rowcount > 0
+
+
+def set_task_render_options(
+    task_id: str,
+    *,
+    subtitle_size: str = "",
+    subtitle_bottom: str = "",
+    tts_rate: str = "",
+    flower: str = "",
+) -> bool:
+    """改这条任务的观感覆盖项。传空字符串就是退回「跟设置」。
+
+    只动这四列：改名目的时候不影响其它字段，也不触发重出片。
+    """
+    with transaction() as connection:
+        cursor = connection.execute(
+            """UPDATE tasks SET subtitle_size=?, subtitle_bottom=?, tts_rate=?,
+               flower=?, updated_at=? WHERE id=?""",
+            (
+                _pick(subtitle_size, RENDER_OPTION_VALUES["subtitle_size"]),
+                _pick(subtitle_bottom, RENDER_OPTION_VALUES["subtitle_bottom"]),
+                (tts_rate or "").strip(),
+                _pick(flower, {"0", "1"}),
+                utc_now(),
+                task_id,
+            ),
         )
         return cursor.rowcount > 0
 
@@ -494,6 +546,11 @@ def serialize_task(row, include_script: bool = True) -> dict:
         "aspect_ratio": row["aspect_ratio"],
         "voice": row["voice"],
         "audio_mode": row["audio_mode"] if "audio_mode" in row.keys() else "",
+        # 这四项空字符串表示「跟设置」。前端据此显示「跟设置」，不做成假的默认值。
+        "subtitle_size": row["subtitle_size"] if "subtitle_size" in row.keys() else "",
+        "subtitle_bottom": row["subtitle_bottom"] if "subtitle_bottom" in row.keys() else "",
+        "tts_rate": row["tts_rate"] if "tts_rate" in row.keys() else "",
+        "flower": row["flower"] if "flower" in row.keys() else "",
         "style": row["style"],
         "status": row["status"],
         "stage": row["stage"],

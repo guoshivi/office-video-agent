@@ -230,6 +230,16 @@ def _flag(settings: dict, key: str, default: str = "0") -> bool:
     return str(settings.get(key, default)).strip() not in {"", "0", "false", "False", "off"}
 
 
+def _task_value(task, key: str) -> str:
+    """读任务级覆盖值。老的 row 没有这列、或填的是空串，都返回空让设置兜底。"""
+    try:
+        if key not in task.keys():
+            return ""
+        return str(task[key] or "").strip()
+    except (AttributeError, TypeError, IndexError, KeyError):
+        return ""
+
+
 def _render_settings(task: dict, safe_mode: bool = False) -> dict:
     width, height = (1080, 1920) if task["aspect_ratio"] == "9:16" else (1920, 1080)
     speaker = "Eric" if task["voice"] == "male_professional" else "Serena"
@@ -238,12 +248,21 @@ def _render_settings(task: dict, safe_mode: bool = False) -> dict:
         gap = float(settings.get("render_sentence_gap") or 0.22)
     except ValueError:
         gap = 0.22
-    # 语速：设置里存的是 "+10%" 这种百分比，工作台那边要倍率
-    rate = str(settings.get("render_tts_rate") or "").strip()
+    # 语速：设置里存的是 "+10%" 这种百分比，工作台那边要倍率。
+    # 任务上选过就听任务的——同一条片子改语速不该逼人先去改全局设置。
+    rate = _task_value(task, "tts_rate") or str(settings.get("render_tts_rate") or "").strip()
     try:
         speed = round(1 + float(rate.rstrip("%")) / 100, 2) if rate else 1.0
     except ValueError:
         speed = 1.0
+    # 花字开关：任务上写了 0/1 就听任务的，否则听设置
+    task_flower = _task_value(task, "flower")
+    if task_flower == "1":
+        flower_on = True
+    elif task_flower == "0":
+        flower_on = False
+    else:
+        flower_on = _flag(settings, "render_flower", "1")
     # target_duration=0 表示「根据原素材时长出片」：探测原始视频的真实长度
     target_seconds = int(task["target_duration"])
     if target_seconds <= 0:
@@ -259,11 +278,15 @@ def _render_settings(task: dict, safe_mode: bool = False) -> dict:
         "vox_voice": "natural_female",
         "subtitles": True,
         "subtitle_size": {"small": 42, "medium": 54, "large": 66}.get(
-            str(settings.get("render_subtitle_size") or "medium"), 54,
+            _task_value(task, "subtitle_size")
+            or str(settings.get("render_subtitle_size") or "medium"),
+            54,
         ),
         # 工作台自己的三档位置：靠上 560 / 居中 380 / 靠下 240
         "subtitle_bottom": {"high": 560, "middle": 380, "low": 240}.get(
-            str(settings.get("render_subtitle_bottom") or "middle"), 380,
+            _task_value(task, "subtitle_bottom")
+            or str(settings.get("render_subtitle_bottom") or "middle"),
+            380,
         ),
         "subtitle_border": 3,
         "subtitle_style": "classic",
@@ -282,7 +305,7 @@ def _render_settings(task: dict, safe_mode: bool = False) -> dict:
         # 下面这几个是三件套的开关。默认跟工作台界面一致（全开），
         # 失败时 render_task 会用 safe_mode 关掉重跑一次，不会让中介干等
         "sticker_enabled": False if safe_mode else _flag(settings, "render_sticker", "1"),
-        "flower_enabled": False if safe_mode else _flag(settings, "render_flower", "1"),
+        "flower_enabled": False if safe_mode else flower_on,
         "sfx_enabled": False if safe_mode else _flag(settings, "render_sfx", "1"),
         "flower_style": str(settings.get("render_flower_style") or "auto").strip() or "auto",
         "flower_density": str(settings.get("render_flower_density") or "high").strip() or "high",
