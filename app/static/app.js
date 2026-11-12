@@ -830,6 +830,8 @@ function resetQuick() {
   $("#quick-step-property").classList.remove("done");
   $("#quick-submit").disabled = true;
   $("#quick-summary").textContent = "选好视频、确认房源，就可以开始。";
+  // 打开时就把设置里的默认选择显示出来，让人看见"确实有这个开关"
+  $("#quick-audio-mode").value = state.settings.local_audio_mode || "mix";
 }
 
 function humanSize(bytes) {
@@ -986,6 +988,14 @@ async function submitQuick() {
       return;
     }
     const task = bound.task;
+    // 快速出片也要能选原声：先把选择落到任务上，再提交出片
+    const audioMode = $("#quick-audio-mode")?.value || "";
+    const effective = task.audio_mode || state.settings.local_audio_mode || "mix";
+    if (audioMode && audioMode !== effective) {
+      await api(`/api/tasks/${task.id}/audio`, {
+        method: "PUT", body: JSON.stringify({ audio_mode: audioMode }),
+      });
+    }
     button.textContent = "正在提交出片…";
     await api(`/api/tasks/${task.id}/render`, { method: "POST" });
     closeDialog("quick-dialog");
@@ -1286,7 +1296,8 @@ $("#render-task").addEventListener("click", async () => {
     applyTaskDetail(updated, false);
     // 先把这条任务的原声选择落库，再出片：出片读的是任务上的值
     const audioMode = $("#detail-audio-mode").value;
-    if (audioMode !== (state.currentTask.audio_mode || "")) {
+    const effective = state.currentTask.audio_mode || state.settings.local_audio_mode || "mix";
+    if (audioMode !== effective) {
       await api(`/api/tasks/${state.currentTask.id}/audio`, {
         method: "PUT", body: JSON.stringify({ audio_mode: audioMode }),
       });

@@ -388,7 +388,15 @@
 
         <li class="quick-step" id="quick-step-go">
           <span class="quick-index">3</span>
-          <div class="quick-body"><p class="quick-summary" id="quick-summary">选好视频、确认房源，就可以开始。</p></div>
+          <div class="quick-body">
+            <p class="quick-summary" id="quick-summary">选好视频、确认房源，就可以开始。</p>
+            <label class="quick-audio">原声<select id="quick-audio-mode">
+              <option value="mix">保留原声（压低垫在口播下）</option>
+              <option value="voice">不要原声（只有口播 + 音乐）</option>
+              <option value="original">只要原声（不配口播）</option>
+              <option value="mute">完全静音</option>
+            </select><small>现场安静、有钥匙声脚步声就保留；嘈杂就改成不要原声。</small></label>
+          </div>
         </li>
       </ol>
 

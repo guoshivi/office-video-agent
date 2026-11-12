@@ -1523,6 +1523,8 @@ dialog[open] { animation: dialogIn 0.32s var(--ease-out); }
 .quick-empty { padding: 9px 12px; font-size: 11.5px; color: var(--text-3); }
 .quick-summary { margin: 0; font-size: 12.5px; line-height: 1.65; color: var(--text-2); }
 .quick-summary strong { color: var(--text); }
+/* 第 3 步的原声选择：跟摘要同一块，别默认藏起来 */
+.quick-audio { margin-top: 12px; max-width: 360px; }
 .dialog-spacer { flex: 1; }
 
 /* ============================================================ 命令面板 */
