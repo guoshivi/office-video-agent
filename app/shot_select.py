@@ -55,6 +55,9 @@ SELECT_BUDGET = 120.0
 
 WEIGHTS = {"sharpness": 0.45, "brightness": 0.30, "color": 0.25}
 
+# 选镜结果的结构变过一次就加一，老缓存自动作废
+CACHE_VERSION = 3
+
 
 class ShotSelectError(RuntimeError):
     pass
@@ -101,17 +104,28 @@ def _frame_scores(image_path: str) -> dict[str, float] | None:
     sat = float(hsv[:, :, 1].mean())
     color = min(max((sat - 12) / 60.0, 0.0), 1.0)
 
-    return {"sharpness": sharpness, "brightness": brightness, "color": color}
+    # 信息量：Canny 边缘占比。家具、隔断、窗框、踢脚线越多越高；
+    # 白墙和空走廊接近 0。实测室内实拍落在 3%~10%，所以 14% 封顶——
+    # 除数设小了（比如 6%）所有镜头都会顶到 1.0，等于白算。
+    # 它不进 WEIGHTS：只用来挑开场镜头，掺进总分会把既有排序全打乱。
+    edges = cv2.Canny(gray, 60, 160)
+    detail = min(float((edges > 0).mean()) / 0.14, 1.0)
+
+    return {"sharpness": sharpness, "brightness": brightness, "color": color, "detail": detail}
 
 
-def _score_frames(paths: list[str]) -> float:
+def _score_frames(paths: list[str]) -> tuple[float, float]:
+    """返回 (画质总分, 画面信息量)。两者分开用：总分决定用不用这段，
+    信息量只决定谁当开场镜头。"""
     import numpy as np
 
     per_frame = [score for p in paths if (score := _frame_scores(p))]
     if not per_frame:
-        return 0.0
+        return 0.0, 0.0
     means = {key: float(np.mean([frame[key] for frame in per_frame])) for key in WEIGHTS}
-    return sum(WEIGHTS[key] * means[key] for key in WEIGHTS)
+    total = sum(WEIGHTS[key] * means[key] for key in WEIGHTS)
+    detail = float(np.mean([frame.get("detail", 0.0) for frame in per_frame]))
+    return total, detail
 
 
 # ------------------------------------------------------------------ 文字 / 人物
@@ -206,7 +220,9 @@ def _split_segments(cuts: list[float], duration: float) -> list[tuple[float, flo
 
 
 def _cache_key(path: Path, stat) -> str:
-    return f"{path.resolve()}|{int(stat.st_mtime)}|{stat.st_size}|{MAX_CLIP}"
+    # CACHE_VERSION 进 key：改了打分口径（比如加了 detail），老缓存必须失效，
+    # 否则同一段素材永远用旧分数，改动看上去"没生效"。
+    return f"{path.resolve()}|{int(stat.st_mtime)}|{stat.st_size}|{MAX_CLIP}|{CACHE_VERSION}"
 
 
 def _load_cache(key: str) -> list[dict] | None:
@@ -274,12 +290,13 @@ def candidate_clips(path: str | Path, *, ocr_top: int = OCR_TOP, prefer_clean: b
     scored: list[dict] = []
     for start, end in segments:
         inside = [item for item in frames if start <= item[0] < end][:FRAMES_PER_CLIP]
-        score = _score_frames([p for _t, p in inside])
+        score, detail = _score_frames([p for _t, p in inside])
         scored.append({
             "start": round(start, 2),
             "end": round(end, 2),
             "seconds": round(end - start, 2),
             "score": round(score, 3),
+            "detail": round(detail, 3),
             "has_text": False,
             "_frames": [p for _t, p in inside],
         })
@@ -311,11 +328,40 @@ def candidate_clips(path: str | Path, *, ocr_top: int = OCR_TOP, prefer_clean: b
     return scored
 
 
-def pick_clips(path: str | Path, needed: int) -> list[tuple[float, float]]:
-    """选 needed 个镜头，返回 [(start, end)]，按片子里出现顺序排。
+def _hook_order(chosen: list[dict], hook_first: bool = True) -> list[dict]:
+    """把最抓人的一段提到最前，其余按拍摄顺序跟着走（绕一圈，不跳乱）。
+
+    开场只从前面 85% 里挑：万一最高分在片尾，从最后一秒开场再绕回门口，
+    人看着会晕。
+
+    排序键是 detail（边缘密度）而不是 score。画质分在这里没用——亮度/饱和度
+    都是"越接近理想越高"，室内实拍几乎全部打平，等于没区分。真正决定
+    「第一眼抓不抓人」的是信息量：有家具、有隔断、有窗框的镜头边缘密，
+    白墙和空走廊几乎是零。
+    """
+    if not hook_first or len(chosen) <= 1:
+        return chosen
+    head = max(1, int(round(len(chosen) * 0.85)))
+    best = max(
+        range(head),
+        key=lambda i: (
+            not chosen[i]["has_text"],
+            chosen[i].get("detail", 0.0),
+            chosen[i]["score"],
+        ),
+    )
+    return chosen[best:] + chosen[:best]
+
+
+def pick_clips(path: str | Path, needed: int, *, hook_first: bool = True) -> list[tuple[float, float]]:
+    """选 needed 个镜头，返回 [(start, end)]。
 
     规则：blocked 的段垫底；同一段不连用两次；不够就重复用最好的几段，
     重复时间隔尽量远。
+
+    hook_first：第一个镜头用画质最高的那段。抖音的流量几乎由前 3 秒决定，
+    开头是一面白墙还是整面落地窗，完播率差一个档。剩下的按拍摄顺序从开场
+    镜头往后绕一圈——保持「进门往里走」的空间感，只把最抓人的那一下提到最前。
     """
     clips = candidate_clips(path, ocr_top=max(needed + 4, OCR_TOP))
     good = [c for c in clips if not c["has_text"] and c["seconds"] >= MIN_CLIP]
@@ -340,6 +386,7 @@ def pick_clips(path: str | Path, needed: int) -> list[tuple[float, float]]:
         used[best_index] = used.get(best_index, 0) + 1
 
     chosen.sort(key=lambda c: c["start"])
+    chosen = _hook_order(chosen, hook_first)
     result = [(c["start"], min(c["end"], c["start"] + MAX_CLIP)) for c in chosen]
 
     # 同一段被用了两次时会相邻出现，插花分散开

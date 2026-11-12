@@ -70,6 +70,10 @@ LABEL_Y = 340
 
 AUDIO_MODES = {"mix", "original", "voice", "mute"}
 
+# 成片最后定格多少秒。定格帧是干净的（字幕已结束），正好给人截图、或者
+# 让画面停在最有说服力的那一格上；不留反而显得"话没说完就切走了"。
+END_HOLD = 1.5
+
 # Ken Burns：缓推到 1.12 倍再缓拉回来，交替使用，空镜就有呼吸感
 ZOOM_IN = 0.12             # 最大推近幅度
 CANVAS_W, CANVAS_H = 1080, 1920
@@ -675,6 +679,7 @@ def render_storyboard(
     caption_bottom: int = CAPTION_MARGIN_V,
     caption_highlight: bool = True,
     caption_highlight_regex: bool = True,
+    end_hold: float = END_HOLD,
 ) -> Path:
     """把 storyboard 渲染成片。storyboard 每项：
 
@@ -759,6 +764,11 @@ def render_storyboard(
         cursor += sentence["duration"]
     total = round(cursor, 2)
 
+    # 1.4) 尾帧定格：最后一帧克隆出来铺满 hold 秒。时长要算进 total，
+    # 否则音轨比画面短一截，-shortest 会把定格帧砍掉。
+    hold = max(0.0, float(end_hold or 0.0))
+    total = round(total + hold, 2)
+
     # 1.5) 镜头分配：每 3 秒左右一个镜头，一句长文案拆几个空镜，画面不干等
     shots_needed = sum(max(1, round(sentence["duration"] / 3.0)) for sentence in sentences)
     clips = pick_clips(source, shots_needed)
@@ -810,6 +820,9 @@ def render_storyboard(
             f"setpts=(PTS-STARTPTS)/{item['slow']:.4f},fps={fps},"
             f"scale={canvas[0]}:{canvas[1]},eq=brightness=0.02:saturation=1.10:contrast=1.04,setsar=1"
         )
+        # 只定格最后一帧：接在最后一段后面，clone 出来的还是它自己的末帧
+        if hold > 0 and index == len(plan) - 1:
+            chain += f",tpad=stop_mode=clone:stop_duration={hold:.2f}"
         video_parts.append(f"[0:v]{chain}[v{index}]")
     concat_in = "".join(f"[v{i}]" for i in range(len(plan)))
     video_parts.append(f"{concat_in}concat=n={len(plan)}:v=1:a=0[base]")
