@@ -697,7 +697,8 @@ async function loadSettings() {
    ["render_bgm", "1"], ["render_bgm_volume", "0.14"],
    ["render_subtitle_size", "medium"], ["render_subtitle_bottom", "middle"],
    ["render_subtitle_highlight", "1"], ["render_highlight_source", "ai"],
-   ["render_kenburns", "1"]].forEach(([name, value]) => {
+   ["render_kenburns", "1"], ["tts_provider", "auto"], ["tts_cluster", "volcano_tts"],
+   ["tts_emotion_scale", "4"]].forEach(([name, value]) => {
     if (form.elements[name] && !form.elements[name].value) form.elements[name].value = value;
   });
   if (form.elements.default_duration) {
@@ -717,6 +718,16 @@ async function loadSettings() {
   $("#workbench-pill").textContent = workbench.online ? "在线" : health.workbench_configured ? "离线" : "待配置";
   $("#workbench-pill").className = `status-pill ${workbench.online ? "active" : health.workbench_configured ? "failed" : "needs_review"}`;
   $("#data-directory").textContent = dataInfo.data_directory;
+  // 配音用哪家：豆包 / 免费兜底，一眼能看出来，不用翻到设置里找
+  const ttsState = health.tts_state || { provider: "edge", label: "edge-tts", ready: true, detail: "" };
+  const ttsBox = $("#tts-state");
+  if (ttsBox) {
+    ttsBox.textContent = `${ttsState.detail || ""}`.trim() || ttsState.label;
+    $("#tts-pill").textContent = ttsState.provider === "volcano"
+      ? (ttsState.ready ? "豆包语音" : "待补音色")
+      : "免费配音";
+    $("#tts-pill").className = `status-pill ${ttsState.provider === "volcano" && ttsState.ready ? "active" : "neutral"}`;
+  }
   renderFeishu(feishu);
   renderBitable(bitable);
   loadSemanticStatus().catch(() => {});
@@ -1254,6 +1265,41 @@ $("#settings-form").addEventListener("submit", async (event) => {
     toast("设置已保存到本机");
   } catch (error) { toast(error.message, true); }
   finally { busy(form, false); }
+});
+
+$("#tts-preview").addEventListener("click", async () => {
+  const form = $("#settings-form");
+  const button = $("#tts-preview");
+  const label = $("#tts-preview-state");
+  button.disabled = true;
+  label.textContent = "先生成一句…";
+  try {
+    // 先落库，试听用的就是刚填进去的凭据，不用先点保存再回来
+    const values = Object.fromEntries(new FormData(form).entries());
+    values.default_duration = Number(values.default_duration || 45);
+    state.settings = await api("/api/settings", { method: "PUT", body: JSON.stringify(values) });
+    const response = await fetch("/api/tts/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: "230平的办公室，整整一面落地窗，白天不用开灯。",
+        voice: form.elements.default_voice ? form.elements.default_voice.value : "female_warm",
+      }),
+    });
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}));
+      throw new Error(detail.detail || "试听失败，检查 AppID / Token 和音色 ID");
+    }
+    const provider = response.headers.get("X-TTS-Provider") || "";
+    const blob = await response.blob();
+    const audio = new Audio(URL.createObjectURL(blob));
+    const name = provider === "volcano" ? "豆包语音" : "免费配音";
+    label.textContent = name + "，播放中…";
+    audio.onended = () => { label.textContent = name + "（试听结束）"; };
+    await audio.play();
+  } catch (error) {
+    label.textContent = error.message;
+  } finally { button.disabled = false; }
 });
 
 $("#save-script").addEventListener("click", async () => {

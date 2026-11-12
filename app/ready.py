@@ -157,7 +157,17 @@ def _local_render_item() -> Item:
             "render", "出片", False,
             "缺渲染字体，字幕会变成方块。data/render-env 里的字体别删",
         )
-    return Item("render", "出片", True, "本机出片就绪，不依赖别的机器")
+    # 配音来源顺带说一句：配了豆包就说豆包，没配就说清是免费方案
+    from . import tts
+
+    tts_state = tts.status()
+    if tts_state.get("provider") == "volcano" and tts_state.get("ready"):
+        detail = "本机出片就绪，配音用豆包音色"
+    elif tts_state.get("provider") == "volcano":
+        detail = "本机出片就绪；豆包语音还差音色 ID，先去设置里补"
+    else:
+        detail = "本机出片就绪；配音用免费方案，想更真就去设置里填豆包凭据"
+    return Item("render", "出片", True, detail)
 
 
 def _workbench_item(url: str) -> Item:

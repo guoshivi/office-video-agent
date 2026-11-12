@@ -20,7 +20,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import logging
@@ -32,7 +31,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import bgm, flower_text
+from . import bgm, flower_text, tts
 from .asr import _windows_path
 from .db import get_settings, utc_now
 from .shot_select import pick_clips
@@ -132,15 +131,25 @@ def _has_audio(path: Path) -> bool:
 
 # ------------------------------------------------------------------ 文案转语音
 
-def synth_speech(text: str, out_path: Path, voice: str = TTS_VOICE, rate: str = TTS_RATE) -> Path:
-    """合成一句口播。断句用逗号喂给 TTS，停顿会更自然。"""
-    import edge_tts
+def synth_speech(
+    text: str,
+    out_path: Path,
+    voice: str = TTS_VOICE,
+    rate: str = TTS_RATE,
+    voice_key: str = "",
+) -> Path:
+    """合成一句口播。断句用逗号喂给 TTS，停顿会更自然。
 
-    async def run() -> None:
-        communicate = edge_tts.Communicate(text, voice, rate=rate)
-        await communicate.save(str(out_path))
-
-    asyncio.run(run())
+    真正的合成在 app/tts.py：配了火山凭据就用豆包音色，没配或调用失败
+    自动退回 edge-tts。voice 是 edge 的音色名，voice_key 是女/男预设，
+    用来映射豆包那边的 speaker id。
+    """
+    tts.synthesize(
+        text, out_path,
+        voice_key=voice_key or "female_warm",
+        edge_voice=voice,
+        rate=rate,
+    )
     if not out_path.is_file() or out_path.stat().st_size == 0:
         raise RenderError(f"语音合成失败：{text[:20]}")
     return out_path
@@ -652,6 +661,7 @@ def render_storyboard(
     fps: int = 30,
     audio_mode: str = "mix",
     tts_voice: str = TTS_VOICE,
+    tts_voice_key: str = "female_warm",
     tts_rate: str = TTS_RATE,
     kenburns: bool = True,
     canvas: tuple[int, int] = (CANVAS_W, CANVAS_H),
@@ -712,7 +722,10 @@ def render_storyboard(
         speech = None
         spoken = 0.0
         if want_voice:
-            speech = synth_speech(clean, work / f"tts{index:02d}.mp3", voice=tts_voice, rate=tts_rate)
+            speech = synth_speech(
+                clean, work / f"tts{index:02d}.mp3",
+                voice=tts_voice, rate=tts_rate, voice_key=tts_voice_key,
+            )
             spoken = media_duration(speech)
         sentences.append({
             "text": clean,
@@ -1018,9 +1031,9 @@ DATA_OUT_DIR = BASE_DIR / "data" / "renders"
 
 # 任务 voice 选项 → edge-tts 音色
 _VOICE_MAP = {
-    "female_warm": ("zh-CN-XiaoxiaoNeural", "+10%"),
-    "female_professional": ("zh-CN-XiaoxiaoNeural", "+4%"),
-    "male_professional": ("zh-CN-YunjianNeural", "+6%"),
+    "female_warm": (tts.EDGE_VOICES["female_warm"], "+10%"),
+    "female_professional": (tts.EDGE_VOICES["female_professional"], "+4%"),
+    "male_professional": (tts.EDGE_VOICES["male_professional"], "+6%"),
 }
 
 
@@ -1168,6 +1181,7 @@ def render_task_locally(task_row) -> Path:
         out,
         audio_mode=audio_mode,
         tts_voice=voice,
+        tts_voice_key=str(task_row["voice"] or "female_warm"),
         tts_rate=rate,
         canvas=canvas,
         goal_seconds=goal or None,

@@ -1181,6 +1181,10 @@ textarea { resize: vertical; line-height: 1.7; width: 100%; }
 .settings-form label small { font-size: 11px; color: var(--text-3); }
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
+/* 试听这类"按钮 + 状态字"的横排：按钮按内容宽，状态字吃掉剩下 */
+.form-row-inline { display: flex; align-items: center; gap: 10px; }
+.settings-hint { font-size: 12.5px; color: var(--text-3); }
+
 /* 表单控件统一高度：select 默认比 input 高一点点，一行两个时看着很歪 */
 .settings-form input:not([type="file"]),
 .settings-form select,
@@ -1716,15 +1720,39 @@ kbd {
 .copy-field textarea { min-height: 132px; line-height: 1.72; resize: vertical; }
 .copy-field small { color: var(--text-3); }
 
-.settings-group {
+/* 设置页的分区：五组各一块，组内才用副标题。
+   以前是"一个大组里塞六个副标题"，层级只有两级、边界看不出来，
+   所以拆成独立卡片，标题下面一句话说明这块管什么。 */
+.settings-section {
   display: grid;
-  gap: 10px;
-  padding: 12px 14px;
-  border: 1px dashed var(--line);
-  border-radius: 12px;
-  background: var(--surface-2, rgba(255, 255, 255, 0.02));
+  gap: 11px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
 }
-.settings-group-title { margin: 0; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); }
+.settings-section-head { display: grid; gap: 3px; }
+.settings-section-head h5 { margin: 0; font-size: 13.5px; font-weight: 600; color: var(--text); }
+.settings-section-head span { font-size: 11.5px; line-height: 1.5; color: var(--text-3); }
+
+/* 保存条吸在可视区底部：设置页很长，改到哪都能直接存，不用滚回最下面。
+   底色必须不透明，半透明会让下面的表单字段透上来，看着像叠了两层字。 */
+.settings-savebar {
+  position: sticky;
+  bottom: -1px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin: 0 -22px -22px;
+  padding: 11px 22px;
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 15px 15px;
+  background: var(--bg-soft);
+}
+.settings-savebar-hint { font-size: 11.5px; color: var(--text-3); }
+.settings-advanced { margin-top: 2px; }
 
 /* 出片参数的小标题（字幕 / 花字 / 音乐 / 配音与画面）：
    跟工作台右侧的页签一一对应，扫一眼就知道这组是干什么的。 */

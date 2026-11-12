@@ -275,6 +275,17 @@ DEFAULT_SETTINGS = {
     # 画面与配音
     "render_kenburns": os.getenv("OVA_RENDER_KENBURNS", "1"),
     "render_tts_rate": os.getenv("OVA_RENDER_TTS_RATE", ""),   # 留空=用音色自带语速
+    # 配音来源：auto=有火山凭据就用豆包音色，没有就退回 edge-tts；也可强制指定
+    "tts_provider": os.getenv("OVA_TTS_PROVIDER", "auto"),
+    "tts_appid": os.getenv("VOLC_TTS_APPID", ""),
+    "tts_token": os.getenv("VOLC_TTS_TOKEN", ""),
+    "tts_cluster": os.getenv("OVA_TTS_CLUSTER", "volcano_tts"),
+    "tts_endpoint": os.getenv("OVA_TTS_ENDPOINT", ""),
+    # 豆包音色 id（控制台里复制）；哪个性别留空，那个性别就走免费配音
+    "tts_voice_female": os.getenv("OVA_TTS_VOICE_FEMALE", ""),
+    "tts_voice_male": os.getenv("OVA_TTS_VOICE_MALE", ""),
+    "tts_emotion": os.getenv("OVA_TTS_EMOTION", ""),           # 留空=音色自带的中性语气
+    "tts_emotion_scale": os.getenv("OVA_TTS_EMOTION_SCALE", "4"),
     # ---- 发布 ----
     # 两个平台默认都关：发布是破坏性动作，必须人工先确认账号和环境就绪再打开。
     "publish_xhs_enabled": os.getenv("PUBLISH_XHS_ENABLED", "0"),

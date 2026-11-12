@@ -1,6 +1,7 @@
 import logging
 import shutil
 import threading
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -171,6 +172,16 @@ class SettingsUpdate(BaseModel):
     render_highlight_source: str = Field(default="ai", max_length=10)
     render_kenburns: str = Field(default="1", max_length=4)
     render_tts_rate: str = Field(default="", max_length=10)
+    # 配音来源：auto / volcano / edge；其余是火山凭据与音色（留空就走免费配音）
+    tts_provider: str = Field(default="auto", max_length=10)
+    tts_appid: str = Field(default="", max_length=120)
+    tts_token: str = Field(default="", max_length=500)
+    tts_cluster: str = Field(default="volcano_tts", max_length=40)
+    tts_endpoint: str = Field(default="", max_length=200)
+    tts_voice_female: str = Field(default="", max_length=120)
+    tts_voice_male: str = Field(default="", max_length=120)
+    tts_emotion: str = Field(default="", max_length=20)
+    tts_emotion_scale: float = Field(default=4.0, ge=1, le=5)
     # 大模型：留空表示不用 AI，文案走规则版
     llm_provider: str = Field(default="", max_length=20)
     llm_api_key: str = Field(default="", max_length=300)
@@ -205,7 +216,18 @@ def health():
         "semantic_search_configured": is_configured(),
         "semantic_model": semantic_status()["model"],
         "feishu_state": get_bot().state,
+        "tts_state": _tts_state(),
     }
+
+
+def _tts_state() -> dict:
+    """配音来源状态：前端用来提示"现在用的是豆包音色还是免费配音"。"""
+    from . import tts
+
+    try:
+        return tts.status()
+    except Exception as error:  # noqa: BLE001 - 体检不能因为配音配置异常整页失败
+        return {"provider": "edge", "label": "edge-tts", "ready": True, "detail": f"读取配音配置失败：{error}"}
 
 
 @app.get("/api/dashboard")
@@ -487,6 +509,30 @@ def task_detail(task_id: str):
     return serialize_task(row)
 
 
+class TtsPreviewRequest(BaseModel):
+    text: str = Field(default="", max_length=200)
+    voice: str = Field(default="female_warm", max_length=30)
+
+
+@app.post("/api/tts/preview")
+def tts_preview(payload: TtsPreviewRequest):
+    """试听一句：选音色、调语速、验证凭据都靠它，不用真出片。"""
+    from . import tts
+
+    text = payload.text.strip() or "230平的办公室，整整一面落地窗，白天不用开灯。"
+    out = DATA_DIR / "cache" / "tts-preview" / f"{utc_now().replace(':', '')[:15]}-{uuid.uuid4().hex[:6]}.mp3"
+    try:
+        result = tts.synthesize(text, out, voice_key=payload.voice)
+    except tts.TTSError as error:
+        raise HTTPException(400, str(error)) from error
+    return FileResponse(
+        result["path"],
+        media_type="audio/mpeg",
+        filename="preview.mp3",
+        headers={"X-TTS-Provider": result["provider"]},
+    )
+
+
 @app.get("/api/tasks/{task_id}/video")
 def source_video(task_id: str):
     row = get_task(task_id)
@@ -629,6 +675,11 @@ def update_settings(payload: SettingsUpdate):
         raise HTTPException(400, "重点词来源只能是 ai / rules / manual")
     if values["llm_provider"] and values["llm_provider"] not in {"ark", "deepseek"}:
         raise HTTPException(400, "模型服务商只支持 ark（豆包）或 deepseek")
+    if values["tts_provider"] not in {"auto", "volcano", "edge"}:
+        raise HTTPException(400, "配音来源只能是 auto / volcano / edge")
+    if values["tts_endpoint"] and not values["tts_endpoint"].startswith(("http://", "https://")):
+        raise HTTPException(400, "配音接口地址必须以 http:// 或 https:// 开头")
+    values["tts_emotion_scale"] = f"{float(values['tts_emotion_scale']):.1f}"
     if values["llm_base_url"] and not values["llm_base_url"].startswith(("http://", "https://")):
         raise HTTPException(400, "模型接口地址必须以 http:// 或 https:// 开头")
     with transaction() as connection:

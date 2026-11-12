@@ -204,21 +204,39 @@
         <section class="view" id="view-settings">
           <div class="settings-grid">
             <form class="panel settings-form" id="settings-form">
-              <div class="panel-title"><div><h4>生成与发布默认值</h4><p>新建任务时可以再次调整。</p></div></div>
-              <label>公开咨询引导<input name="public_contact" maxlength="300" placeholder="例如：欢迎私信咨询房源详情"></label>
-              <div class="form-row">
-                <label>默认时长（秒，填 0 = 根据原素材）<input name="default_duration" type="number" min="0" max="180"></label>
-                <label>默认比例<select name="default_aspect_ratio"><option>9:16</option><option>16:9</option></select></label>
+              <div class="panel-title">
+                <div><h4>设置</h4><p>全部保存在这台电脑上；分五组，按你改东西的顺序排的。改完点右下角保存。</p></div>
               </div>
-              <label>默认声音<select name="default_voice"><option value="female_warm">温暖女声</option><option value="male_professional">专业男声</option></select></label>
-              <div class="settings-group">
-                <p class="settings-group-title">出片</p>
-                <label>默认原声<select name="local_audio_mode">
-                  <option value="mix">保留原声（压低垫在口播下）</option>
-                  <option value="voice">不要原声（只有口播 + 音乐）</option>
-                  <option value="original">只要原声（不配口播）</option>
-                  <option value="mute">完全静音</option>
-                </select><small>新建任务时还能单独改这一条。现场安静、有钥匙声脚步声就保留，能加分。</small></label>
+
+              <!-- 1. 建任务时的默认值 -->
+              <section class="settings-section">
+                <div class="settings-section-head">
+                  <h5>新建任务的默认值</h5>
+                  <span>每建一条视频都会预选这几项，建的时候还能单独改</span>
+                </div>
+                <div class="form-row">
+                  <label>默认时长（秒，填 0 = 跟原素材）<input name="default_duration" type="number" min="0" max="180"></label>
+                  <label>默认比例<select name="default_aspect_ratio"><option>9:16</option><option>16:9</option></select></label>
+                </div>
+                <div class="form-row">
+                  <label>默认声音<select name="default_voice"><option value="female_warm">温暖女声</option><option value="male_professional">专业男声</option></select><small>念稿用男声还是女声；用哪家引擎在下面「配音」里定。</small></label>
+                  <label>默认原声<select name="local_audio_mode">
+                    <option value="mix">保留原声（压低垫在口播下）</option>
+                    <option value="voice">不要原声（只有口播 + 音乐）</option>
+                    <option value="original">只要原声（不配口播）</option>
+                    <option value="mute">完全静音</option>
+                  </select><small>现场安静、有钥匙声脚步声就保留，能加分。</small></label>
+                </div>
+                <label>公开咨询引导<input name="public_contact" maxlength="300" placeholder="例如：欢迎私信咨询房源详情"><small>这句会放在每条片子结尾，别写电话微信，抖音会限流。</small></label>
+                <label>出品目录（成片另存位置）<input name="export_output_root" placeholder="例如 D:\出品 或 data\exports"><small>出片完成后自动复制一份到这里；留空则只保存在系统 data 目录。</small></label>
+              </section>
+
+              <!-- 2. 画面与字幕 -->
+              <section class="settings-section">
+                <div class="settings-section-head">
+                  <h5>画面与字幕</h5>
+                  <span>改完要重新出片才生效</span>
+                </div>
 
                 <p class="settings-subtitle">字幕</p>
                 <div class="form-row">
@@ -302,35 +320,70 @@
                   <option value="悲伤">慢叙</option>
                 </select></label>
 
-                <p class="settings-subtitle">配音与画面</p>
+                <p class="settings-subtitle">画面</p>
+                <label>运镜<select name="render_kenburns">
+                  <option value="1">开（缓推缓拉，画面有呼吸感）</option>
+                  <option value="0">关（纯静止画面）</option>
+                </select></label>
+
+                <p class="section-note">字幕一律单行，长句按标点和语速切成几段依次出。字幕里写【拎包入驻】这样的方括号词会变金色，并挑一处做大字花字。贴纸和音效是远程工作台的能力，本机引擎还没接。</p>
+              </section>
+
+              <!-- 3. 配音 -->
+              <section class="settings-section">
+                <div class="settings-section-head">
+                  <h5>配音</h5>
+                  <span>谁在念这段话：豆包音色更真，免费方案不花钱</span>
+                </div>
                 <div class="form-row">
+                  <label>配音来源<select name="tts_provider">
+                    <option value="auto">自动（填了豆包凭据就用豆包，否则免费）</option>
+                    <option value="volcano">只用豆包语音（火山引擎）</option>
+                    <option value="edge">只用免费配音（edge-tts）</option>
+                  </select><small>一条 45 秒约 5 分钱。没配凭据自动走免费，不会出不了片。</small></label>
                   <label>语速<select name="render_tts_rate">
                     <option value="">跟随音色（默认）</option>
                     <option value="-5%">慢一点（看得清字幕）</option>
                     <option value="+10%">标准偏快</option>
                     <option value="+25%">快（信息密度高）</option>
-                  </select></label>
-                  <label>运镜<select name="render_kenburns">
-                    <option value="1">开（缓推缓拉，画面有呼吸感）</option>
-                    <option value="0">关（纯静止画面）</option>
-                  </select></label>
+                  </select><small>租赁视频建议「慢一点」，数字念得清比赶时间重要。</small></label>
                 </div>
-                <p class="section-note">出片、配音、字幕、花字、BGM 都在这台电脑上完成，不需要另一台机器配合。字幕一律单行，长句会按标点和语速切成几段依次出，不折两行。字幕里写【拎包入驻】这样的方括号词，会被当成重点词变金色，并挑一处做大字花字。贴纸和音效是远程工作台的能力，本机引擎还没接，需要就去下面切工作台。</p>
-                <div class="form-row"><button class="button button-primary" type="submit">保存出片参数</button></div>
                 <details class="settings-more">
-                  <summary>改用远程视频工作台（一般不用动）</summary>
-                  <label>视频工作台 API 地址<input name="workbench_url" placeholder="http://192.168.x.x:8765"></label>
-                  <label>工作台输出目录<input name="workbench_output_root" placeholder="data/workbench_outputs"></label>
-                  <label>工作台授权素材根目录<input name="workbench_material_root" placeholder="留空则自动探测"><small>工作台只接受授权 NAS 根目录内的素材与输出，留空时自动读取 /api/roots（会跳过没登录的 NAS）。</small></label>
-                  <label>渲染引擎<select name="render_engine">
-                    <option value="local">本机 FFmpeg（推荐）</option>
-                    <option value="workbench">工作台（远程机器）</option>
-                  </select><small>选「工作台」要保证那台机器开着、并且和本机在同一个网络；连不上时会自动退回本机出片。</small></label>
+                  <summary>豆包语音凭据与音色（不填就用免费配音）</summary>
+                  <div class="form-row">
+                    <label>AppID<input name="tts_appid" placeholder="语音控制台里的 AppID"></label>
+                    <label>Access Token<input name="tts_token" type="password" placeholder="语音控制台里的 Access Token"></label>
+                  </div>
+                  <div class="form-row">
+                    <label>女声音色 ID<input name="tts_voice_female" placeholder="例如 zh_female_xxx_bigtts"></label>
+                    <label>男声音色 ID<input name="tts_voice_male" placeholder="留空则男声仍用免费配音"></label>
+                  </div>
+                  <div class="form-row">
+                    <label>情感<select name="tts_emotion">
+                      <option value="">不指定（用音色自带语气）</option>
+                      <option value="neutral">中性</option>
+                      <option value="happy">愉悦</option>
+                      <option value="excited">兴奋</option>
+                      <option value="surprised">惊讶</option>
+                      <option value="coldness">冷静克制</option>
+                    </select></label>
+                    <label>情感强度<input name="tts_emotion_scale" type="number" min="1" max="5" step="0.5" placeholder="4"><small>1 最淡，5 最明显；4 是官方默认。</small></label>
+                  </div>
+                  <label>集群<input name="tts_cluster" placeholder="volcano_tts"><small>大模型音色一般填 volcano_tts，复刻音色填 volcano_icl，以控制台为准。</small></label>
+                  <label>接口地址<input name="tts_endpoint" placeholder="默认 https://openspeech.bytedance.com/api/v1/tts"><small>只有走代理或私有化部署时才需要改。</small></label>
+                  <div class="form-row form-row-inline">
+                    <button class="button button-sm" type="button" id="tts-preview">试听一句</button>
+                    <span class="settings-hint" id="tts-preview-state">试听会先把上面的凭据存到本机，再用当前音色念一句</span>
+                  </div>
                 </details>
-              </div>
-              <label>出品目录（成片另存位置）<input name="export_output_root" placeholder="例如 D:\出品 或 data\exports"><small>出片完成后自动复制一份到这里；留空则只保存在系统 data 目录。</small></label>
-              <div class="settings-group">
-                <p class="settings-group-title">AI 文案（可选）</p>
+              </section>
+
+              <!-- 4. AI 文案 -->
+              <section class="settings-section">
+                <div class="settings-section-head">
+                  <h5>AI 文案</h5>
+                  <span>可选；不配也能出片，文案走规则版</span>
+                </div>
                 <div class="form-row">
                   <label>模型服务商<select name="llm_provider">
                     <option value="">不用 AI（走规则版）</option>
@@ -341,18 +394,43 @@
                 </div>
                 <label>API Key<input name="llm_api_key" type="password" placeholder="粘贴控制台里的 key" autocomplete="off"><small>豆包默认 doubao-seed-1-6-250615，DeepSeek 默认 deepseek-chat；填了 key 新建任务里就能「AI 生成」「润色」。</small></label>
                 <label>接口地址（一般不用填）<input name="llm_base_url" placeholder="留空用官方地址"></label>
+              </section>
+
+              <!-- 5. 发布 -->
+              <section class="settings-section">
+                <div class="settings-section-head">
+                  <h5>发布到平台</h5>
+                  <span>小红书 / 抖音的节奏与本机连接地址</span>
+                </div>
+                <div class="form-row">
+                  <label>每日发布上限<input name="publish_daily_limit" type="number" min="1" max="20"></label>
+                  <label>最小间隔（分钟）<input name="publish_min_interval_minutes" type="number" min="0" max="1440"></label>
+                </div>
+                <label>小红书 MCP 地址<input name="publish_xhs_mcp_url" placeholder="http://127.0.0.1:18060/mcp"></label>
+                <label>抖音 CDP 地址<input name="publish_douyin_cdp_url" placeholder="http://127.0.0.1:9222"></label>
+              </section>
+
+              <!-- 高级：远程工作台，默认收起 -->
+              <details class="settings-more settings-advanced">
+                <summary>高级：改用远程视频工作台（一般不用动）</summary>
+                <label>视频工作台 API 地址<input name="workbench_url" placeholder="http://192.168.x.x:8765"></label>
+                <label>工作台输出目录<input name="workbench_output_root" placeholder="data/workbench_outputs"></label>
+                <label>工作台授权素材根目录<input name="workbench_material_root" placeholder="留空则自动探测"><small>工作台只接受授权 NAS 根目录内的素材与输出，留空时自动读取 /api/roots（会跳过没登录的 NAS）。</small></label>
+                <label>渲染引擎<select name="render_engine">
+                  <option value="local">本机 FFmpeg（推荐）</option>
+                  <option value="workbench">工作台（远程机器）</option>
+                </select><small>选「工作台」要保证那台机器开着、并且和本机在同一个网络；连不上时会自动退回本机出片。</small></label>
+              </details>
+
+              <div class="settings-savebar">
+                <span class="settings-savebar-hint">改完点这里保存，五组一起存。</span>
+                <button class="button button-primary" type="submit">保存设置</button>
               </div>
-              <div class="form-row">
-                <label>每日发布上限<input name="publish_daily_limit" type="number" min="1" max="20"></label>
-                <label>最小间隔（分钟）<input name="publish_min_interval_minutes" type="number" min="0" max="1440"></label>
-              </div>
-              <label>小红书 MCP 地址<input name="publish_xhs_mcp_url" placeholder="http://127.0.0.1:18060/mcp"></label>
-              <label>抖音 CDP 地址<input name="publish_douyin_cdp_url" placeholder="http://127.0.0.1:9222"></label>
-              <button class="button button-primary" type="submit">保存设置</button>
             </form>
 
             <div class="settings-side">
               <article class="panel integration-card"><div class="integration-icon">FF</div><div><h4>视频处理引擎</h4><p id="ffmpeg-status">检测中</p></div><span class="status-pill neutral" id="ffmpeg-pill">检测中</span></article>
+              <article class="panel integration-card"><div class="integration-icon">配</div><div><h4>口播配音</h4><p id="tts-state">正在检查配音来源</p></div><span class="status-pill neutral" id="tts-pill">检测中</span></article>
               <article class="panel integration-card"><div class="integration-icon">V</div><div><h4>本地向量模型</h4><p id="semantic-status">正在读取索引状态</p><button class="text-button semantic-button" id="semantic-reindex" type="button">建立 / 更新索引</button></div><span class="status-pill neutral" id="semantic-pill">检测中</span></article>
               <article class="panel integration-card"><div class="integration-icon">W</div><div><h4>现有视频工作台</h4><p id="workbench-status">正在检查 API 配置</p></div><span class="status-pill neutral" id="workbench-pill">检测中</span></article>
               <article class="panel integration-card"><div class="integration-icon">飞</div><div><h4>飞书 Agent</h4><p id="feishu-status">正在检查长连接</p><button class="text-button semantic-button" id="feishu-restart" type="button">重连长连接</button></div><span class="status-pill neutral" id="feishu-pill">检测中</span></article>
