@@ -52,7 +52,7 @@ SETUP = """# 另一台电脑上怎么跑起来
 
 - Windows 10/11，**Python 3.12**（3.13 有些依赖轮子还没有）
 - FFmpeg **已经随包**放在 `vendor/ffmpeg/`，不用装、也不要删；
-  真丢了就跑 `python tools\fetch_ffmpeg.py` 重新取
+  真丢了就跑 `python tools/fetch_ffmpeg.py` 重新取
 
 ## 2. 装依赖
 
@@ -142,6 +142,9 @@ start.bat
 
 
 def _skip(relative: Path) -> bool:
+    # 根目录的部署说明会被下面 writestr 重写一份，别打两遍
+    if relative.as_posix() == "部署说明.md":
+        return True
     parts = relative.parts
     # data 要单独判：只有渲染环境那几个文件带，其它业务数据不带
     if parts[0] == "data":
