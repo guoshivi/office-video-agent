@@ -531,9 +531,10 @@ def copy_polish(payload: CopyPolish):
 async def create_task(
     property_id: str = Form(...),
     video: UploadFile = File(...),
-    target_duration: int = Form(default=45),
+    # 0 = 跟原片，这是默认：素材拍多长就出多长，不用先猜一个秒数
+    target_duration: int = Form(default=0),
     aspect_ratio: str = Form(default="9:16"),
-    voice: str = Form(default="female_warm"),
+    voice: str = Form(default="doubao_xiaohe"),
     style: str = Form(default="professional"),
     script: str = Form(default=""),
     audio_mode: str = Form(default=""),
@@ -841,9 +842,9 @@ class ClipBind(BaseModel):
     query: str = Field(default="", max_length=200)
     property_id: str = Field(default="", max_length=64)
     # 0 = 跟随原素材时长；否则 10–180 秒
-    target_duration: int = Field(default=45, ge=0, le=180)
+    target_duration: int = Field(default=0, ge=0, le=180)
     aspect_ratio: str = "9:16"
-    voice: str = Field(default="female_warm", max_length=40)
+    voice: str = Field(default="doubao_xiaohe", max_length=40)
     style: str = Field(default="professional", max_length=40)
 
 

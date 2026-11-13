@@ -176,9 +176,9 @@ def bind_clip(
     *,
     query: str = "",
     property_id: str = "",
-    target_duration: int = 45,
+    target_duration: int = 0,
     aspect_ratio: str = "9:16",
-    voice: str = "female_warm",
+    voice: str = "doubao_xiaohe",
     style: str = "professional",
 ) -> dict:
     """把待绑定视频落到具体房源上并建任务。

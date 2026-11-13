@@ -236,7 +236,7 @@ CREATE TABLE IF NOT EXISTS template_embeddings (
 
 DEFAULT_SETTINGS = {
     "public_contact": "欢迎私信咨询房源详情和看房安排",
-    "default_duration": "45",
+    "default_duration": "0",   # 0 = 跟原片：素材拍多长就出多长
     "default_aspect_ratio": "9:16",
     "default_voice": "doubao_xiaohe",
     "workbench_path": "",
@@ -390,6 +390,22 @@ def init_db() -> None:
                 (key, value),
             )
         _migrate_default_voice_to_doubao(connection)
+        _migrate_default_duration_to_source(connection)
+
+
+def _migrate_default_duration_to_source(connection) -> None:
+    """把默认时长从写死的 45 秒换成「跟原片」，同样只做一次。
+
+    45 秒是个凭空猜的数：素材只有 25 秒就撑不满，60 秒又会被剪碎。
+    跟原片不用猜，也符合实际拍摄习惯。用标记位兜住，改过的用户不再动。
+    """
+    marker = "migration_default_duration_source"
+    if connection.execute("SELECT 1 FROM settings WHERE key=?", (marker,)).fetchone():
+        return
+    row = connection.execute("SELECT value FROM settings WHERE key='default_duration'").fetchone()
+    if row and str(row["value"] or "").strip() in {"45", ""}:
+        connection.execute("UPDATE settings SET value='0' WHERE key='default_duration'")
+    connection.execute("INSERT OR REPLACE INTO settings(key, value) VALUES (?, '1')", (marker,))
 
 
 def _migrate_default_voice_to_doubao(connection) -> None:

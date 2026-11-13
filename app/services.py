@@ -382,12 +382,33 @@ def _pick(value: str, allowed: set[str]) -> str:
     return text if text in allowed else ""
 
 
+def _resolve_target_duration(requested: int, video_path) -> int:
+    """把「跟原片」(0) 解析成素材的真实秒数。
+
+    渲染层本来就把 0 当「按素材长度」，但写脚本那句 `max(10, target_duration or 45)`
+    会把 0 当成 45 秒去算句子数——于是要么句子太多压不进画面，要么太少靠尾帧硬撑。
+    所以在建任务时探一次，让「写几句话」「出多长」「列表显示几秒」用同一个数。
+    """
+    if requested > 0:
+        return requested
+    # 延迟导入：shots 反过来要用本模块的 get_task，模块顶层互相 import 会成环
+    from .shots import ShotError, probe_duration
+
+    try:
+        seconds = probe_duration(video_path)
+    except (ShotError, OSError):
+        return 45
+    if seconds <= 0:
+        return 45
+    return max(10, min(180, int(round(seconds))))
+
+
 def create_task_record(
     *,
     property_row,
     video_path,
     original_filename: str,
-    target_duration: int = 45,
+    target_duration: int = 0,
     aspect_ratio: str = "9:16",
     voice: str = "female_warm",
     style: str = "professional",
@@ -413,6 +434,8 @@ def create_task_record(
     跟系统设置，填了就是这条任务自己的选择。
     """
     custom = (script_override or "").strip()
+    # 0 = 跟原片。所有入口（网页、飞书、IM）都在这里统一解析，免得每个入口各判一次
+    target_duration = _resolve_target_duration(target_duration, video_path)
     if custom:
         script = custom if custom.endswith(("。", "！", "？", ".", "!", "?")) else custom + "。"
         warnings = ["用了你自己提供的文案，系统没有按房源字段核对，出片前请确认没有写错的信息。"]

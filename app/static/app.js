@@ -767,10 +767,8 @@ async function loadSettings() {
     if (form.elements[name] && !form.elements[name].value) form.elements[name].value = value;
   });
   if (form.elements.default_duration) {
-    // 默认时长设为 0 表示「默认根据原素材」：选完视频会自动开启跟原片模式
-    $("#task-form").elements.target_duration.value = Number(settings.default_duration) > 0 ? settings.default_duration : 45;
-    $("#task-form").elements.aspect_ratio.value = settings.default_aspect_ratio;
-    $("#task-form").elements.voice.value = settings.default_voice;
+    // 设置里的默认时长可能是 0（跟原片），这时任务表单留空，选完视频再自动填真实秒数
+    applyTaskDefaults();
   }
   $("#ffmpeg-status").textContent = health.ffmpeg_available ? "FFmpeg 已就绪（随程序自带）" : "FFmpeg 不见了；出片会失败，重装一份完整包";
   $("#ffmpeg-pill").textContent = health.ffmpeg_available ? "可用" : "待配置";
@@ -907,7 +905,8 @@ function applyTaskDefaults() {
   const settings = state.settings || {};
   const duration = Number(settings.default_duration);
   if (form.elements.target_duration) {
-    form.elements.target_duration.value = duration > 0 ? duration : 45;
+    // 0 = 跟原片。留空让「按原片」的占位提示显示出来，选完视频再自动写真实秒数
+    form.elements.target_duration.value = duration > 0 ? duration : "";
   }
   if (settings.default_aspect_ratio && form.elements.aspect_ratio) {
     form.elements.aspect_ratio.value = settings.default_aspect_ratio;
@@ -1540,7 +1539,7 @@ $("#tts-preview").addEventListener("click", async () => {
   try {
     // 先落库，试听用的就是刚填进去的凭据，不用先点保存再回来
     const values = Object.fromEntries(new FormData(form).entries());
-    values.default_duration = Number(values.default_duration || 45);
+    values.default_duration = Number(values.default_duration || 0);
     state.settings = await api("/api/settings", { method: "PUT", body: JSON.stringify(values) });
     const response = await fetch("/api/tts/preview", {
       method: "POST",
