@@ -146,3 +146,49 @@ def test_seats_available_without_rent():
     assert ctx.get("seats") == "100"
     assert "monthly" not in ctx
     assert "per_person" not in ctx
+
+
+def test_custom_partition_never_reaches_the_sentence():
+    """「格局」填成"可定制"时不给变量，让依赖它的句式整句跳过。
+
+    回归用：模板句 "{area}平，{partition}的办公室" 会直接拼出
+    "800平，可定制的办公室"。隔断是业主做好的现状，没有按租客要求
+    重新隔这回事，这词进了文案就是承诺。表里 50 条有 8 条是这么填的。
+    """
+    from app import hooks
+
+    ctx = hooks.context({"面积": "800平", "格局": "可定制"})
+    assert "partition" not in ctx
+    # 洗完之后不能留个空串，否则会拼出"800平，的办公室"
+    assert "partition" not in hooks.context({"面积": "800平", "格局": "可分割"})
+
+
+def test_partition_reads_as_spoken_chinese():
+    """表里写「3隔」，念出来是「3隔的办公室」，换成「3个隔间」。"""
+    from app import hooks
+
+    ctx = hooks.context({"面积": "220平", "格局": "3隔"})
+    assert ctx["partition"] == "3个隔间"
+
+
+def test_custom_partition_never_reaches_the_sentence():
+    """「格局」填成"可定制"时不给变量，让依赖它的句式整句跳过。
+
+    回归用：模板句 "{area}平，{partition}的办公室" 会直接拼出
+    "800平，可定制的办公室"。隔断是业主做好的现状，没有按租客要求
+    重新隔这回事，这词进了文案就是承诺。表里 50 条有 8 条是这么填的。
+    """
+    from app import hooks
+
+    ctx = hooks.context({"面积": "800平", "格局": "可定制"})
+    assert "partition" not in ctx
+    # 洗完之后不能留个空串，否则会拼出"800平，的办公室"
+    assert "partition" not in hooks.context({"面积": "800平", "格局": "可分割"})
+
+
+def test_partition_reads_as_spoken_chinese():
+    """表里写「3隔」，念出来是「3隔的办公室」，换成「3个隔间」。"""
+    from app import hooks
+
+    ctx = hooks.context({"面积": "220平", "格局": "3隔"})
+    assert ctx["partition"] == "3个隔间"

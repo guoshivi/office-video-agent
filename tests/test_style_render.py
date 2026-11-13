@@ -111,24 +111,57 @@ def test_no_furniture_promise_without_field():
         assert word not in text, text
 
 
-def test_furniture_line_only_when_field_says_so():
-    """房源表明确写了带家具，才允许讲家具。"""
+def test_furniture_never_promised_even_when_field_says_so():
+    """这个业务不配家具：连"带家具"的脏数据也不许讲。
+
+    问过：业主从来不配家具，隔断也是做好的现状，没有定制。
+    而「家具」这一栏在表里被当杂物栏用——50 条里只有 2 条写着带家具，
+    其余填的是电梯口 / 毛坯 / 带露台 / 展厅 / 店面。
+    上一版留了"填了「带家具」就会讲"的开关，等于给脏数据留了道后门：
+    填错一条就能发出一条假广告，客户来看房桌子搬空了要吵。
+    """
     facts = {"area": "220", "partition": "3加1格局", "furnishing_layout": "带全套家具"}
     board = fallback_storyboard(SPEC, facts)
     text = "".join(entry["text"] for entry in board)
-    assert any(word in text for word in ("配齐", "全套", "拎包")), text
+    for word in ("配齐", "全套", "拎包", "家具", "桌椅"):
+        assert word not in text, text
 
 
-def test_has_furniture_needs_explicit_wording():
-    """家具那栏常被填成"毛坯/电梯口/展厅"，这些都不算带家具。"""
-    from app.copywriting import _has_furniture
+def test_furn_shot_still_gets_a_line():
+    """furn 镜头不能因为句库下线就空着。
 
-    assert not _has_furniture({})
-    assert not _has_furniture({"家具": "毛坯"})
-    assert not _has_furniture({"家具": "电梯口"})
-    assert not _has_furniture({"家具": "带露台"})
-    assert _has_furniture({"家具": "带家具"})
-    assert _has_furniture({"家具": "带全套家具"})
+    角色名还叫 furn——refvideo 的镜头骨架、前端下拉、style_template 的
+    卖点轮换都在用它。句库那组删掉以后必须走别名落到 seat，
+    否则这一镜直接没台词，成片会多出一段画面没有旁白。
+    """
+    from app.copywriting import _topic_for
+
+    assert _topic_for("", "furn") == "seat"
+    assert _topic_for("工位实景，打印机和文件", "furn") == "seat"
+
+
+def test_partition_never_promises_customization():
+    """格局只说"现在隔了几间"，不说"可以怎么隔"。
+
+    回归用：1 隔被讲成"一个大开间，中间没切，怎么分你自己定"——
+    既说错了几间，又承诺了做不到的事（隔断是业主做好的，没有定制这回事）。
+    另外「0隔」和「空着」以前都算 0，导致明确的大开间永远说不出来。
+    """
+    from app.services import _partition_count, _partition_lines
+
+    assert _partition_count("可定制") is None
+    assert _partition_count("") is None
+    assert _partition_count("2600平") is None
+    assert _partition_count("0隔") == 0
+    assert _partition_count("1隔") == 1
+    assert _partition_count("13隔") == 13
+
+    for count in (0, 1, 2, 3, 6):
+        text = "".join(_partition_lines(count))
+        for word in ("自己定", "自己划", "想怎么改", "按你的"):
+            assert word not in text, text
+    assert "大开间" in _partition_lines(0)[0]
+    assert "大开间" not in _partition_lines(1)[0]
 
 
 def test_desk_phrase_does_not_inflate():

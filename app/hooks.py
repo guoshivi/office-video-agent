@@ -212,6 +212,24 @@ def monthly_rent(facts: dict, area: float | None = None) -> float | None:
     return explain_rent(facts, area)["monthly"]
 
 
+# 「格局」这一栏实测 50 条里有 8 条填的是"可定制"。可隔断是业主早就做好的现状，
+# 没有按租客要求重新隔这回事——这个词一旦进了文案就是承诺，所以直接不给变量，
+# 依赖 {partition} 的句式自然整句跳过，落到"格局方正，没有斜角"那几句。
+_PARTITION_NOISE = ("定制", "可分割", "可自由", "自由组合", "待定", "面议", "另议")
+
+
+def _clean_value(name: str, value: str) -> str:
+    """把字段洗成能直接念出口的说法。洗不干净就返回空串，让整句跳过。"""
+    if name == "partition":
+        if any(word in value for word in _PARTITION_NOISE):
+            return ""
+        # 表里写成「3隔」，念出来是「3隔的办公室」；换成「3个隔间」
+        match = re.fullmatch(r"(\d+)\s*隔", value)
+        if match:
+            return f"{match.group(1)}个隔间"
+    return value
+
+
 def context(facts: dict) -> dict[str, str]:
     """房源事实 → 模板变量。只放能算准的，算不准的直接不出现。"""
     area_number = _first_number(facts.get("面积") or facts.get("area") or "")
@@ -229,7 +247,9 @@ def context(facts: dict) -> dict[str, str]:
     ):
         value = str(facts.get(key) or "").strip()
         if value and name not in ctx:
-            ctx[name] = value
+            cleaned = _clean_value(name, value)
+            if cleaned:
+                ctx[name] = cleaned
 
     rent_text = str(facts.get("租金") or facts.get("rent") or "").strip()
     if rent_text:

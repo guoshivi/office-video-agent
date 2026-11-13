@@ -59,14 +59,11 @@ def _area_number(facts: dict[str, str]) -> str:
     return match.group(0) if match else ""
 
 
-# 办公室租赁一般不带家具，画面里的桌椅常常是上一个租客留下的。
-# 只有房源表**明说**带家具，才允许文案讲家具；其余（包括字段为空）一律不讲。
-_FURN_TRUE_WORDS = ("带家具", "全套家具", "配齐", "家私全", "精装带家")
-
-
-def _has_furniture(facts: dict[str, str]) -> bool:
-    text = str(facts.get("家具") or "")
-    return any(word in text for word in _FURN_TRUE_WORDS)
+# 这个业务**从来不配家具，也不做定制**：业主不给家具，隔断是做好了的现状。
+# 所以文案里干脆没有"家具"这个话题，也不再留"填了带家具就讲"的开关——
+# 那一栏本来就被当杂物栏在用（填过电梯口/毛坯/展厅/店面），
+# 留一个开关等于给脏数据留一道后门，填错一条就能发出一条假广告。
+# 画面里拍到的桌椅是上一个租客还没搬走的，只描述"这镜拍到了工位区"。
 
 
 # ------------------------------------------------------------------ 规则套写
@@ -81,30 +78,24 @@ _LINE_BANK: dict[str, list[str]] = {
         "{area}平，{partition}的办公室", "面积{area}平，{partition}格局",
         "{area}平{partition}，大小刚刚好",
         # 钩子里已经报过面积时改说格局，不然开头和这句像复读
-        "格局方正，没有斜角", "方方正正，家具怎么摆都合适",
+        "格局方正，没有斜角", "方方正正，摆工位不浪费边角",
     ],
     "light": [
         "采光通透，全景落地窗", "整整一面落地窗，白天不用开灯",
         "双面采光，下午都不用开灯", "这采光，隔着屏幕都亮堂",
     ],
-    "furn": [
-        # 只有房源表**明确写了带家具**才走这一组。
-        # 办公室租赁一般是不配工桌的，画面里出现的桌椅多半是上一个租客还没搬走，
-        # 拿它当"全套配齐"是虚假宣传——客户来看房发现桌子搬空了要吵。
-        # 这四句讲四个不同角度（齐全 / 省钱 / 归属 / 状态），连着说两句也不同义。
-        "工桌工椅全套配齐，直接开工", "桌椅沙发全配好，一分钱不用花",
-        "家具全送，到期不用带走", "带全套家具，拎包就能办公",
-    ],
     "seat": [
-        # 拍到桌椅、但房源没写带家具时说什么：不谈家具，谈这个空间能干什么。
-        # 四句刻意避开 zone 的"分区/动线"，走 数量 / 空间质量 / 可定制 / 交付状态，
-        # 否则一条片子里出现两个工位镜，会连出两句"工位随便摆"。
-        "这一层能摆下{seats}个工位，过道还宽裕", "大开间方方正正，没有暗角",
-        "隔断还没做，按你的部门自己划", "空场交付，装修按自己风格来",
+        # 拍到桌椅时讲什么。桌椅是上家遗留的，一个字都不提。
+        # 四句走 数量 / 空间质量 / 交付状态 / 现房状态，刻意避开 zone 的"分区/动线"，
+        # 否则一条片子里两个工位镜会连出两句"工位随便摆"。
+        # 也不提"可以怎么隔"——隔断是现状，没有按租客要求重新隔这回事。
+        "这一层能摆下{seats}个工位，过道还宽裕", "方正没暗角，边角都能用上",
+        "交房时全部腾空，工位怎么排你说了算", "现房空场，量完尺就能进场",
     ],
     "boss": [
+        # 老板间只讲位置和安静，不讲"带全套家具"——家具这个业务不提供
         "独立老板间，谈单不吵", "单独一间老板办公室，会客安静",
-        "老板间带全套家具，拎包办公",
+        "老板间在里侧，谈事不打扰外面办公",
     ],
     "zone": [
         # 顺序就是取句顺序，按「动线 → 配套 → 分区 → 容量」排。
@@ -127,16 +118,23 @@ _LINE_BANK: dict[str, list[str]] = {
 # 模板原句关键词 → 话题库（按优先级排）
 _KEYWORD_ROUTING: list[tuple[str, str]] = [
     ("采光", "light"), ("落地窗", "light"),
-    ("桌", "furn"), ("椅", "furn"), ("沙发", "furn"), ("家具", "furn"), ("俱全", "furn"),
-    ("老板", "boss"), ("洽谈", "boss"),
+    # 拍到桌子椅子不等于配了家具：走 seat，讲这个空间能放多少工位
+    ("桌", "seat"), ("椅", "seat"), ("沙发", "seat"), ("家具", "seat"),
+    ("老板", "boss"), ("洽谈", "boss"), ("俱全", "zone"),
     ("工区", "zone"), ("工位", "zone"), ("前台", "zone"), ("接待", "zone"), ("入户", "zone"),
     ("租", "value"), ("入住", "value"), ("价", "value"),
 ]
+
+# 镜头角色 → 文案话题。furn 没有独立句库了：这个业务不配家具，
+# 拍到工位区也只讲"这个空间能干什么"。留着这层映射是因为
+# refvideo 的镜头骨架、前端下拉、style_template 的卖点轮换都还在用 furn。
+_TOPIC_ALIAS = {"furn": "seat", "家具": "seat"}
 
 
 def _topic_for(sample: str, role: str) -> str:
     # 没模板时我们自己造的 role 就是话题名，直接命中
     role_key = str(role or "").strip().lower()
+    role_key = _TOPIC_ALIAS.get(role_key, role_key)
     if role_key in _LINE_BANK:
         return role_key
     text = f"{sample} {role}"
@@ -231,10 +229,6 @@ def fallback_storyboard(
         else:
             topic = _topic_for(sample, role)
             avoid = ("area",) if area_used else ()
-            # 拍到桌椅不等于配家具：房源没写带家具，就把这一镜当"这空间能干什么"讲，
-            # 不能顺着画面去承诺"全套配齐"
-            if topic == "furn" and not _has_furniture(normalized):
-                topic = "seat"
             text = pick(topic, avoid=avoid)
         if not text:
             continue
@@ -249,8 +243,8 @@ def fallback_storyboard(
     return board
 
 
-# 没有参考模板时的默认分镜：钩子 → 面积 → 公区 → 家具 → 价格 → 行动
-DEFAULT_ROLES = ("hook", "area", "zone", "furn", "value", "cta")
+# 没有参考模板时的默认分镜：钩子 → 面积 → 公区 → 工位区 → 价格 → 行动
+DEFAULT_ROLES = ("hook", "area", "zone", "seat", "value", "cta")
 
 
 def default_spec(shot_count: int = 6) -> dict:

@@ -75,24 +75,29 @@ def _cn_number(value: int) -> str:
     return str(value)
 
 
-def _partition_count(raw: str) -> int:
-    """「3隔」「5隔间」「三个房间」都数成整数，数不出来算 0。
+def _partition_count(raw: str) -> int | None:
+    """「3隔」「5隔间」「三个房间」都数成整数。数不出来返回 None。
 
-    表里这一列经常被填成面积（见过「2600平」），直接念会变成
-    「隔了2600个房间」，所以带面积单位的一律当脏数据丢掉。
+    返回 0 和返回 None 是两件事：「0隔」是**明确的大开间**，可以说；
+    空着或者填的是别的，是**不知道**，一个字都不能讲。
+    以前两者都算 0，于是「0隔」这套永远说不出格局，「1隔」反倒被讲成
+    「一个大开间，中间没切」——两头都错。
+
+    脏数据一律当 None：带面积单位的（见过「2600平」，念出来是「隔了2600个房间」）、
+    以及「可定制」——隔断是业主做好的现状，没有按租客要求重新隔这回事。
     """
     text = (raw or "").strip()
-    if not text or re.search(r"平|㎡|m²|m2", text):
-        return 0
+    if not text or re.search(r"平|㎡|m²|m2|定制|可分割|自由组合|待定", text):
+        return None
     match = re.search(r"(\d+)", text)
     if match:
         count = int(match.group(1))
     else:
         match = re.search(r"[两二三四五六七八九]", text)
         if not match:
-            return 0
+            return None
         count = 2 if match.group(0) == "两" else "零一二三四五六七八九".index(match.group(0))
-    return count if 0 < count <= 30 else 0
+    return count if 0 <= count <= 30 else None
 
 
 def _workstation_span(sqm: float) -> tuple[int, int]:
@@ -141,15 +146,21 @@ def _fit_audience(sqm: float) -> list[str]:
 
 
 def _partition_lines(count: int) -> list[str]:
-    if count <= 0:
-        return []
+    """只说「现在隔了几间」，不说「可以怎么隔」。
+
+    隔断是业主做好的现状，问过，没有按租客要求重新隔这回事。
+    以前 1 隔会说出「一个大开间，中间没切，怎么分你自己定」——两处都错：
+    隔了 1 间不是大开间，而"怎么分你自己定"是承诺不了的事。
+    """
+    if count == 0:
+        return ["整层一个大开间，中间没有隔断，一眼看到底。"]
     if count == 1:
-        return ["一个大开间，中间没切，怎么分你自己定。"]
+        return ["隔出一个独立房间，开会、谈事都能用。"]
     if count == 2:
         return ["隔了两个房间，老板间和会议室各占一间，刚好。"]
     if count <= 4:
-        return [f"隔了{_cn_number(count)}个房间，老板一间、财务一间、开会一间，正好分完。"]
-    return [f"隔了{_cn_number(count)}个房间，团队怎么分都能落下。"]
+        return [f"隔了{_cn_number(count)}个房间，老板间、会议室、财务都能分开。"]
+    return [f"隔了{_cn_number(count)}个房间，部门再多也分得开。"]
 
 
 def _orientation_lines(text: str) -> list[str]:
@@ -175,15 +186,16 @@ def _orientation_lines(text: str) -> list[str]:
 
 
 def _furnishing_lines(text: str) -> list[str]:
-    """只认明确的装修/家具说法，读不懂的（比如被填成「产权面积」）宁可不念。"""
+    """这一栏现在只讲**客观状态**（毛坯 / 精装 / 阳台 / 展厅），不讲"给你配什么"。
+
+    这业务不配家具、也不做定制，所以"全套家具留着""装修想怎么改都行"
+    这两类句子全部下线——话说出去就是承诺，履约不了要吵。
+    这栏又常被当杂物栏填（见过电梯口/店面/产权面积），读不懂的一律不念。
+    """
     if not text:
         return []
-    if re.search(r"带全套|全套家具|家具齐|家私齐|拎包", text):
-        return ["全套家具留着，桌椅一摆就能开工，这一块不用再花钱。"]
-    if re.search(r"带家具|家私|有家具|带办公", text):
-        return ["家具都留着，桌椅一摆就能开工，这一块不用再花钱。"]
-    if re.search(r"毛坯|清水|空房", text):
-        return ["现在是毛坯，装修你自己做主，想怎么改都行。"]
+    if re.search(r"毛坯|清水", text):
+        return ["现在是毛坯，装修得自己弄。"]
     if re.search(r"精装", text):
         return ["精装交付，不用再折腾装修，进来就能用。"]
     if re.search(r"阳台", text):
@@ -285,7 +297,7 @@ def generate_script(property_row, target_duration: int = 45) -> tuple[str, list[
 
     # ---- 格局 / 朝向 / 家具 ----
     count = _partition_count(partition)
-    if count:
+    if count is not None:
         blocks.append(("partition", _partition_lines(count)))
     if orientation:
         blocks.append(("orientation", _orientation_lines(orientation)))
@@ -333,15 +345,14 @@ def generate_script(property_row, target_duration: int = 45) -> tuple[str, list[
     script = "".join(lines)
 
     warnings = ["这是基于房源字段生成的口播稿，未经视频画面核验，出片前请过一遍。"]
-    # 家具单独说，不并进下面那句"通用说法"：它不是缺字段那么简单，
-    # 而是决定了文案能不能提家具（办公室租赁一般不带家具）。
     if not orientation:
         warnings.append("房源表里朝向是空的，文案已用通用说法兜住；补上这一列，稿子会更具体。")
-    if not furnishing:
-        # 办公室租赁一般不带家具，画面里的桌椅多半是上一个租客还没搬走
+    if furnishing:
+        # 家具这一栏既不是必填、也不该被当成卖点：业务上根本不配家具。
+        # 只有填了东西才提一句，顺便挡一下脏数据（这栏被填过电梯口/店面/展厅）。
         warnings.append(
-            "家具这一栏空着，文案按「不带家具」写：看到画面里的桌椅也不会说成配齐；"
-            "确实带家具就把这一栏填上（写「带家具」），文案才会讲这一条。"
+            f"家具这一栏填的是「{furnishing}」。办公室租赁不配家具，文案不会讲家具，"
+            "这栏现在只用来认毛坯 / 精装 / 阳台这类状态，填别的不会进稿子。"
         )
 
     if sqm:
