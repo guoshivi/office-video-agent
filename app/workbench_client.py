@@ -489,21 +489,49 @@ def render_task(task_id: str) -> None:
             )
 
 
+def _last_json_line(raw: str) -> dict:
+    """从一串输出里挑出最后一行 JSON（渲染子进程的正事结论都在那儿）。"""
+    for line in reversed((raw or "").strip().splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                return json.loads(line)
+            except ValueError:
+                continue
+    return {}
+
+
 def _render_locally(task_id: str, task: dict, reason: str) -> None:
     """本机 ffmpeg 出片兜底。
 
     走独立子进程（app.render_cli）：渲染链路会加载 onnxruntime + torch，
     Windows 上这类 native 依赖偶尔会把宿主进程带崩。子进程崩了服务还活着，
     这条任务照样能拿到明确的失败原因。
+
+    打包成 exe 后 `sys.executable` 就是程序本身，`-m app.render_cli` 没人接，
+    所以改由启动器的 `--render` 分支代跑；结果也不再从 stdout 读（windowed
+    模式下 stdout 不可靠），而是让子进程写到一个文件里。
     """
     import subprocess
     import sys
 
-    from .db import BASE_DIR  # noqa: F401 - 只是为了确认工程根可用
+    from .db import DATA_DIR
 
+    frozen = bool(getattr(sys, "frozen", False))
     logger.warning("任务 %s 切换本地渲染：%s", task["task_no"], reason)
     _set_task_state(task_id, "processing", f"{reason}", 10)
-    command = [sys.executable, "-m", "app.render_cli", task_id]
+
+    result_file = DATA_DIR / "tmp" / f"render-{task_id}.json"
+    if frozen:
+        result_file.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            result_file.unlink()
+        except OSError:
+            pass
+        command = [sys.executable, "--render", task_id, "--result", str(result_file)]
+    else:
+        command = [sys.executable, "-m", "app.render_cli", task_id]
+
     try:
         completed = subprocess.run(
             command,
@@ -517,15 +545,16 @@ def _render_locally(task_id: str, task: dict, reason: str) -> None:
         _set_task_state(task_id, "failed", "本地渲染超时", 0, "本地渲染超过 30 分钟未完成")
         return
 
-    payload: dict = {}
-    for line in reversed((completed.stdout or "").strip().splitlines()):
-        line = line.strip()
-        if line.startswith("{"):
-            try:
-                payload = json.loads(line)
-                break
-            except ValueError:
-                continue
+    if frozen:
+        try:
+            raw = result_file.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            raw = ""
+        detail_source = raw
+    else:
+        raw = completed.stdout or ""
+        detail_source = (completed.stderr or "")
+    payload = _last_json_line(raw)
 
     if completed.returncode == 0 and payload.get("ok"):
         with transaction() as connection:
@@ -536,7 +565,7 @@ def _render_locally(task_id: str, task: dict, reason: str) -> None:
             )
         return
 
-    detail = payload.get("error") or (completed.stderr or "").strip()[-800:] or "子进程异常退出"
+    detail = payload.get("error") or detail_source.strip()[-800:] or "子进程异常退出"
     _set_task_state(
         task_id, "failed", "本地渲染失败", 0,
         f"本地渲染子进程退出码 {completed.returncode}：{detail}",

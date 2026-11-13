@@ -151,10 +151,29 @@ def _render_item(settings: dict) -> Item:
     return _local_render_item()
 
 
+def _module_available(module: str) -> bool:
+    """判断模块在不在。
+
+    打包成 exe 后模块被塞进 PyInstaller 的导入器里，`find_spec` 在部分版本上
+    会返回 None，于是体检会把「明明已经打进去了」的组件报成缺失。所以查不到
+    时再真导一次——导得动就是有。
+    """
+    try:
+        if importlib.util.find_spec(module) is not None:
+            return True
+    except (ImportError, ValueError):
+        pass
+    try:
+        __import__(module)
+    except Exception:  # noqa: BLE001 - 导入失败就是没装，理由不重要
+        return False
+    return True
+
+
 def _local_render_item() -> Item:
     missing = [
         label for module, label in RENDER_MODULES
-        if importlib.util.find_spec(module) is None
+        if not _module_available(module)
     ]
     if missing:
         return Item(
@@ -365,7 +384,7 @@ def install_render_deps() -> dict:
 
     still_missing = [
         label for module, label in RENDER_MODULES
-        if importlib.util.find_spec(module) is None
+        if not _module_available(module)
     ]
     _CACHE["at"] = 0.0   # 装完立刻重查，别让首页还挂着 20 秒前的红条
     if still_missing:

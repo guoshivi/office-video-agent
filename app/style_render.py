@@ -958,23 +958,36 @@ def _flower_chains(
 # ------------------------------------------------------------------ 渲染
 
 def _fontconfig_env() -> dict:
-    """gyan 版 ffmpeg 自带 fontconfig 但没有配置文件，不补会直接报错。"""
+    """gyan 版 ffmpeg 自带 fontconfig 但没有配置文件，不补会直接报错。
+
+    每次重写、不做「文件在就跳过」：这份配置里全是绝对路径，换台机器、
+    换个安装目录、或者打包成 exe 之后，旧文件里的路径就指向不存在的地方。
+    症状是字幕全成方块，而 ffmpeg 只报一句「找不到字体」，很难联想到这儿。
+    """
     import os
 
     conf = DATA_RENDER_DIR / "fonts.conf"
-    if not conf.is_file():
-        fonts_dir = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
-        cache = DATA_RENDER_DIR / "fc-cache"
+    fonts_dir = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+    cache = DATA_RENDER_DIR / "fc-cache"
+    # 必须包含 DATA_RENDER_DIR：随包的 NotoSansSCBlack.ttf 就放在那儿，
+    # 只扫系统字体目录的话中文全变方块。
+    body = (
+        '<?xml version="1.0"?>\n'
+        '<!DOCTYPE fontconfig SYSTEM "fonts.dtd">\n'
+        "<fontconfig>\n"
+        f"  <dir>{fonts_dir}</dir>\n"
+        f"  <dir>{DATA_RENDER_DIR}</dir>\n"
+        f"  <cachedir>{cache}</cachedir>\n"
+        "</fontconfig>\n"
+    )
+    try:
+        DATA_RENDER_DIR.mkdir(parents=True, exist_ok=True)
         cache.mkdir(parents=True, exist_ok=True)
-        conf.write_text(
-            '<?xml version="1.0"?>\n'
-            '<!DOCTYPE fontconfig SYSTEM "fonts.dtd">\n'
-            "<fontconfig>\n"
-            f"  <dir>{fonts_dir}</dir>\n"
-            f"  <cachedir>{cache}</cachedir>\n"
-            "</fontconfig>\n",
-            encoding="utf-8",
-        )
+        conf.write_text(body, encoding="utf-8")
+    except OSError as error:
+        # 装到只读目录（比如 Program Files）时写不进去。用现有的那份继续，
+        # 字体照样能找——只是缓存位置可能是旧路径。
+        logger.warning("字体重配置写不进去，沿用现有的：%s", error)
     return {"FONTCONFIG_FILE": str(conf)}
 
 

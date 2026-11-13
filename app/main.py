@@ -119,6 +119,11 @@ async def no_stale_statics(request: Request, call_next):
     ):
         response.headers["Cache-Control"] = "no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
+    # 桌面启动器会在服务就绪前先显示一个本地「启动中」页面，那个页面以
+    # file:// 打开（origin 是 null），要能读到健康状态就得放开这一个接口。
+    # 只放行 health，其余接口仍然只对同源页面开放。
+    if path == "/api/health":
+        response.headers["Access-Control-Allow-Origin"] = "*"
     return response
 
 

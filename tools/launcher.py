@@ -1,44 +1,141 @@
 """桌面启动器：双击即启动房源视频助手并打开工作台。
 
-做成 exe 放桌面后，用户不需要记任何命令：
-- 服务没跑 → 后台拉起 uvicorn，等健康检查通过，自动打开浏览器
-- 服务已在跑 → 直接打开，或点「停止服务」关掉
+两种运行方式，同一份代码：
+
+- **源码方式**（开发时）：找项目里的 .venv/Scripts/python.exe 起 uvicorn
+- **打包方式**（交付给朋友）：用 exe 自己带 --serve 起服务，不依赖任何外部 Python
+
+数据一律写在 exe 旁边的 data 目录，不放 C 盘用户目录，也不放 PyInstaller 的
+临时解压目录——后者每次运行都换路径，数据库放那儿等于每次都从零开始。
+
+界面上刻意不用 tkinter：打包环境里这台机器的 Python 根本没带 tkinter，
+而朋友的电脑上更不会有。需要弹窗时直接调 Windows 自带的 MessageBox，
+需要进度时开一个本地网页——两样都是零依赖，也更容易做得好着。
 """
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
+import webbrowser
 from pathlib import Path
 
 APP_NAME = "房源视频助手"
 HOST = "0.0.0.0"
-PORT = 8770
+
+
+def _port() -> int:
+    """服务端口。默认 8770，被占用时可以用环境变量 OVA_PORT 换一个。
+
+    start.bat 里也认同一个变量，两边保持一致，免得源码方式和 exe 方式行为不同。
+    """
+    try:
+        value = int(os.environ.get("OVA_PORT", "") or PORT_DEFAULT)
+    except ValueError:
+        value = PORT_DEFAULT
+    return value if 1024 <= value <= 65535 else PORT_DEFAULT
+
+
+PORT_DEFAULT = 8770
+PORT = _port()
 LOCAL_URL = f"http://127.0.0.1:{PORT}"
 HEALTH_URL = f"{LOCAL_URL}/api/health"
-START_TIMEOUT = 60.0
+START_TIMEOUT = 90.0
+
+FROZEN = bool(getattr(sys, "frozen", False))
+
+# Windows 消息框常量
+MB_YESNO = 0x04
+MB_ICONQUESTION = 0x20
+MB_ICONINFO = 0x40
+MB_ICONERROR = 0x10
+IDYES = 6
+
+STARTING_PAGE = """<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>房源视频助手 · 正在启动</title>
+<style>
+:root{color-scheme:dark}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+background:#0e1117;color:#e8ecf4;
+font-family:"Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif}
+.card{width:340px;text-align:center}
+h1{font-size:17px;font-weight:600;margin:0 0 10px;letter-spacing:.02em}
+p{font-size:13px;color:#8b95a9;margin:0 0 24px;line-height:1.7;min-height:44px}
+.track{height:3px;background:#232936;border-radius:2px;overflow:hidden}
+.bar{height:100%;width:6%;border-radius:2px;transition:width .45s ease;
+background:linear-gradient(90deg,#4c8dff,#8ab4ff)}
+.fail{color:#ff8080}
+</style></head>
+<body><div class="card">
+<h1>房源视频助手</h1>
+<p id="tip">正在启动，稍等一下…</p>
+<div class="track"><div class="bar" id="bar"></div></div>
+</div>
+<script>
+const next = new URLSearchParams(location.search).get('next') || 'http://127.0.0.1:8770';
+const bar = document.getElementById('bar');
+const tip = document.getElementById('tip');
+let tries = 0;
+(function tick(){
+  tries++;
+  fetch(next + '/api/health', {cache: 'no-store'})
+    .then(r => {
+      if (!r.ok) throw new Error('not ready');
+      tip.textContent = '好了，正在进入工作台…';
+      bar.style.width = '100%';
+      setTimeout(() => location.replace(next), 250);
+    })
+    .catch(() => {
+      if (tries > 150) {
+        tip.className = 'fail';
+        tip.textContent = '启动失败：超过 75 秒还没起来。请重新双击程序，或把 data/tmp/uvicorn.log 发给维护的人。';
+        return;
+      }
+      bar.style.width = Math.min(92, 6 + tries * 1.5) + '%';
+      setTimeout(tick, 500);
+    });
+})();
+</script></body></html>
+"""
 
 
-def base_dir() -> Path:
-    """项目根目录。打包成 exe 后仍指向真实项目，不跟着 exe 跑。"""
+def install_dir() -> Path:
+    """程序安装目录：打包后是 exe 所在文件夹，源码方式下是项目根。"""
+    if FROZEN:
+        return Path(sys.executable).resolve().parent
     override = os.environ.get("OVA_HOME", "").strip()
     if override and Path(override).is_dir():
         return Path(override)
-    # 源码方式运行时按文件位置推
-    here = Path(__file__).resolve().parent.parent
-    if (here / "app" / "main.py").is_file():
-        return here
-    return Path(r"D:\ova")
+    return Path(__file__).resolve().parent.parent
 
 
-BASE = base_dir()
-VENV_PY = BASE / ".venv" / "Scripts" / "python.exe"
-LOG_DIR = BASE / "data" / "tmp"
+BASE = install_dir()
+# 可写数据目录：exe 旁边的 data。打包后必须显式指定，否则 app/db.py 会把
+# 数据库建到 PyInstaller 的临时目录里，关掉程序就全丢。
+DATA = Path(os.environ.get("OVA_DATA_DIR") or (BASE / "data"))
+LOG_DIR = DATA / "tmp"
 LOG_FILE = LOG_DIR / "uvicorn.log"
+VENV_PY = BASE / ".venv" / "Scripts" / "python.exe"
+
+
+def _say(text: str, style: int = MB_ICONINFO) -> int:
+    """弹一个 Windows 原生消息框，返回点了哪个按钮。
+
+    不用 tkinter 是因为打包环境（以及朋友的电脑）未必带这个模块。
+    """
+    try:
+        import ctypes
+
+        return int(ctypes.windll.user32.MessageBoxW(0, text, APP_NAME, style))
+    except Exception:  # noqa: BLE001 - 弹不出来也不能把启动流程带崩
+        return 0
 
 
 # ------------------------------------------------------------------ 健康检查
@@ -81,25 +178,50 @@ def _pid_on_port() -> int | None:
 
 # ------------------------------------------------------------------ 启动 / 停止
 
+def _server_env() -> dict:
+    env = os.environ.copy()
+    env["OVA_DATA_DIR"] = str(DATA)
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+    return env
+
+
+def server_command() -> list[str] | None:
+    """起服务要执行的命令。打包后是「自己 + --serve」，源码方式走 venv。"""
+    if FROZEN:
+        return [sys.executable, "--serve"]
+    if VENV_PY.is_file():
+        return [str(VENV_PY), "-m", "uvicorn", "app.main:app", "--host", HOST, "--port", str(PORT)]
+    return None
+
+
 def start_server() -> tuple[bool, str]:
-    if not VENV_PY.is_file():
-        return False, f"找不到 Python 环境：{VENV_PY}"
+    command = server_command()
+    if command is None:
+        return False, f"找不到 Python 环境：{VENV_PY}\n\n源码方式运行需要先在项目目录双击 start.bat 装一次环境。"
+
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log = open(LOG_FILE, "a", encoding="utf-8", errors="replace")
     log.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} 启动 {APP_NAME} =====\n")
     log.flush()
+
     no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     detached = getattr(subprocess, "DETACHED_PROCESS", 0)
     breakaway = getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000)
-    command = [str(VENV_PY), "-m", "uvicorn", "app.main:app", "--host", HOST, "--port", str(PORT)]
     # 有的宿主（自动化/远程桌面会话）会给我们套 Job Object，退出时把子进程一起带走。
     # 先尝试让服务脱离作业独立存活，被拒绝再去掉这个标志。
+    last_error: OSError | None = None
     for flags in (no_window | detached | breakaway, no_window | detached):
         try:
             subprocess.Popen(
-                command, cwd=str(BASE),
-                stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                creationflags=flags, close_fds=True,
+                command,
+                cwd=str(BASE),
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                creationflags=flags,
+                close_fds=True,
+                env=_server_env(),
             )
             break
         except OSError as error:
@@ -116,7 +238,7 @@ def start_server() -> tuple[bool, str]:
     return False, f"服务在 {START_TIMEOUT:.0f} 秒内没有就绪。\n\n日志末尾：\n{tail}"
 
 
-def _log_tail(lines: int = 12) -> str:
+def _log_tail(lines: int = 15) -> str:
     if not LOG_FILE.is_file():
         return "（没有日志）"
     try:
@@ -145,101 +267,161 @@ def stop_server() -> tuple[bool, str]:
 
 
 def open_app() -> None:
-    import webbrowser
-
     webbrowser.open(LOCAL_URL)
 
 
-# ------------------------------------------------------------------ 界面
+def show_starting_page() -> bool:
+    """先开一个「正在启动」页，服务就绪后它自己跳进工作台。
 
-def _ui():
-    import tkinter as tk
-    from tkinter import messagebox
-
-    root = tk.Tk()
-    root.title(APP_NAME)
-    root.geometry("360x150")
-    root.resizable(False, False)
-    root.configure(bg="#11141a")
-    tk.Label(root, text=APP_NAME, font=("Microsoft YaHei UI", 14, "bold"),
-             bg="#11141a", fg="#f4f6fb").pack(pady=(22, 6))
-    status = tk.Label(root, text="正在准备…", font=("Microsoft YaHei UI", 10),
-                      bg="#11141a", fg="#9aa4b8")
-    status.pack()
-
-    # 居中
-    root.update_idletasks()
-    x = (root.winfo_screenwidth() - 360) // 2
-    y = (root.winfo_screenheight() - 150) // 2 - 60
-    root.geometry(f"+{x}+{y}")
-    return root, status, messagebox
+    启动要十几秒，这期间如果什么都不显示，用户会以为没点上而反复双击。
+    """
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        page = LOG_DIR / "starting.html"
+        page.write_text(STARTING_PAGE, encoding="utf-8")
+        return bool(webbrowser.open(f"{page.as_uri()}?next={LOCAL_URL}"))
+    except OSError:
+        return False
 
 
-def _ask_running(messagebox) -> str:
+# ------------------------------------------------------------------ 服务本体
+
+def render_task() -> int:
+    """--render 分支：单独一个进程跑一条片子。
+
+    打包后 `sys.executable` 就是 exe 本身，没有解释器能接 `-m app.render_cli`，
+    所以渲染入口也收进启动器里。结果不走 stdout——windowed 模式下它可能是
+    None，父进程用一个 `--result` 指定的文件来接。
+    """
+    argv = sys.argv
+    try:
+        task_id = argv[argv.index("--render") + 1]
+    except (ValueError, IndexError):
+        _say("渲染入口缺少任务 ID。", MB_ICONERROR)
+        return 2
+
+    if "--result" in argv:
+        try:
+            result_path = Path(argv[argv.index("--result") + 1])
+            result_path.parent.mkdir(parents=True, exist_ok=True)
+            handle = open(result_path, "w", encoding="utf-8", errors="replace")
+            sys.stdout = handle
+            sys.stderr = handle
+        except (OSError, IndexError, ValueError):
+            pass
+
+    os.environ.setdefault("OVA_DATA_DIR", str(DATA))
+    try:
+        from app.render_cli import main as render_main
+    except Exception:  # noqa: BLE001 - 起不来也要把原因写进结果文件
+        import traceback
+
+        print(json.dumps({"ok": False, "error": traceback.format_exc()[-800:]}, ensure_ascii=False))
+        return 1
+    # render_cli.main 把 argv[1] 当任务 ID，所以这里塞一个占位符
+    return render_main(["--render", task_id])
+
+
+def serve() -> int:
+    """--serve 分支：真正跑 uvicorn 的进程。
+
+    单独一个进程的好处是关掉启动器不影响出片——一条片子要渲好几分钟，
+    中途被关掉会让人以为程序坏了。
+    """
+    os.environ.setdefault("OVA_DATA_DIR", str(DATA))
+    DATA.mkdir(parents=True, exist_ok=True)
+
+    # 打包后 stdout 可能为 None（windowed 模式），任何 print 都会炸，
+    # 所以统一兜一个文件句柄。
+    if sys.stdout is None or sys.stderr is None:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        handle = open(LOG_FILE, "a", encoding="utf-8", errors="replace")
+        sys.stdout = sys.stdout or handle
+        sys.stderr = sys.stderr or handle
+
+    try:
+        import uvicorn
+
+        from app.main import app
+    except Exception:  # noqa: BLE001 - 起不来要给用户看得到的原因
+        import traceback
+
+        detail = traceback.format_exc()
+        try:
+            LOG_DIR.mkdir(parents=True, exist_ok=True)
+            (LOG_DIR / "serve-crash.log").write_text(detail, encoding="utf-8")
+        except OSError:
+            pass
+        print(detail, file=sys.stderr)
+        _say(f"程序起不来，启动失败。\n\n详情已记录到：\n{DATA / 'tmp' / 'serve-crash.log'}", MB_ICONERROR)
+        return 1
+
+    uvicorn.run(app, host=HOST, port=PORT, log_level="info", access_log=False)
+    return 0
+
+
+# ------------------------------------------------------------------ 入口
+
+def _ask_running() -> str:
     """已经在跑：让用户选打开还是停掉。返回 open / stop / close。"""
-    answer = messagebox.askyesnocancel(
-        APP_NAME,
-        "服务已经在运行了。\n\n是(Y) 打开工作台\n否(N) 停止服务\n取消 什么都不做",
-        parent=None,
+    answer = _say(
+        "程序已经在运行了。\n\n是：打开工作台\n否：关掉服务",
+        MB_YESNO | MB_ICONQUESTION,
     )
-    return {True: "open", False: "stop", None: "close"}[answer]
+    if answer == IDYES:
+        return "open"
+    if answer == 7:  # IDNO
+        return "stop"
+    return "close"
 
 
 def main() -> int:
-    if _healthy():
-        import tkinter as tk
-        from tkinter import messagebox
+    # PyInstaller 打包后如果程序里用到 multiprocessing，必须挡在最前面，
+    # 否则子进程会把整个启动流程再跑一遍。
+    try:
+        import multiprocessing
 
-        root = tk.Tk()
-        root.withdraw()
-        choice = _ask_running(messagebox)
-        root.destroy()
+        multiprocessing.freeze_support()
+    except Exception:  # noqa: BLE001 - 没有这个模块不影响主流程
+        pass
+
+    if "--serve" in sys.argv:
+        return serve()
+
+    if "--render" in sys.argv:
+        return render_task()
+
+    if "--stop" in sys.argv:
+        ok, detail = stop_server()
+        _say(detail, MB_ICONINFO if ok else MB_ICONERROR)
+        return 0 if ok else 1
+
+    if _healthy():
+        choice = _ask_running()
         if choice == "open":
             open_app()
         elif choice == "stop":
             ok, detail = stop_server()
-            root2 = tk.Tk()
-            root2.withdraw()
-            messagebox.showinfo(APP_NAME, detail)
-            root2.destroy()
+            _say(detail, MB_ICONINFO if ok else MB_ICONERROR)
             return 0 if ok else 1
         return 0
 
-    root, status, messagebox = _ui()
-    result: dict[str, object] = {}
+    if _port_busy():
+        _say(
+            f"端口 {PORT} 被别的程序占着（进程 {_pid_on_port()}），但这个程序没在运行。\n\n"
+            "请先把占用它的程序关掉，再双击一次。",
+            MB_ICONERROR,
+        )
+        return 1
 
-    def worker() -> None:
-        if _port_busy():
-            result["error"] = (
-                f"端口 {PORT} 被别的程序占着（进程 {_pid_on_port()}），"
-                "但健康检查没通过。\n请先关掉那个程序再试。"
-            )
-            return
-        status.config(text="正在启动服务，请稍候…")
-        ok, detail = start_server()
-        result["ok"] = ok
-        result["detail"] = detail
-
-    import threading
-
-    thread = threading.Thread(target=worker, daemon=True)
-    thread.start()
-
-    def poll() -> None:
-        if thread.is_alive():
-            root.after(300, poll)
-            return
-        if result.get("ok"):
-            status.config(text="已就绪，正在打开工作台…")
-            open_app()
-            root.after(700, root.destroy)
-        else:
-            root.withdraw()
-            messagebox.showerror(APP_NAME, str(result.get("error") or result.get("detail") or "启动失败"))
-            root.destroy()
-
-    root.after(300, poll)
-    root.mainloop()
+    showed_page = show_starting_page()
+    ok, detail = start_server()
+    if not ok:
+        _say(detail, MB_ICONERROR)
+        return 1
+    # 「启动中」页会自己跳转；万一浏览器没打开它，这里兜一次直接进工作台
+    if not showed_page:
+        open_app()
     return 0
 
 
