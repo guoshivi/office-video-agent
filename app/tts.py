@@ -95,6 +95,52 @@ def speakable(text: str) -> str:
 
     return _NUMBER_RE.sub(replace, raw)
 
+
+# 价格数字前垫一小段静音：让「月租…两千六」里的数从语流里跳出来，
+# 不垫的话一串「月租两千六摊到每天八十七」糊成一句，观众抓不住价格。
+# 只认钱——数字后面跟钱单位，或前面是金额引导词。面积（平）、数量（个/间）、
+# 地铁（号线）一律不垫：满句都是停顿听着像卡带。
+_MONEY_UNITS = ("元", "块", "/月", "/天", "/㎡", "/位", "万", "元/平")
+_MONEY_CUES = ("月租", "租金", "物业费", "押金", "一个月", "每月", "人均", "每人", "摊到", "均摊")
+_BARE_NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
+
+
+def price_splits(text: str, max_splits: int = 2) -> list[str]:
+    """在金额数字前把句子切开，切点由调用方垫静音再拼回来。
+
+    返回单元素 = 这句不用垫。三条规则把误伤挡在外面：
+    - 句首的数字不切：句子开头的停顿归上一句的句间停顿管；
+    - 切点前是标点的不切：引擎在标点处本来就会停，再垫就拖沓了；
+    - 一句最多切 2 刀，价格多半在句尾，多了就是切错。
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return []
+
+    cuts: list[int] = []
+    for match in _BARE_NUMBER_RE.finditer(raw):
+        start, end = match.span()
+        after = raw[end: end + 3]
+        before = raw[max(0, start - 4): start]
+        if not (after.startswith(_MONEY_UNITS) or any(before.endswith(cue) for cue in _MONEY_CUES)):
+            continue
+        if start == 0 or raw[start - 1] in "，。、；：！？,.;:!? ":
+            continue
+        cuts.append(start)
+        if len(cuts) >= max_splits:
+            break
+    if not cuts:
+        return [raw]
+
+    pieces: list[str] = []
+    prev = 0
+    for cut in cuts:
+        pieces.append(raw[prev:cut])
+        prev = cut
+    pieces.append(raw[prev:])
+    return pieces
+
+
 # 火山的两套鉴权：新版控制台给 API Key（X-Api-Key），老版给 appid + access token。
 # 两种都支持，用户拿到哪种填哪种，不用去理解区别。
 DEFAULT_ENDPOINT = "https://openspeech.bytedance.com/api/v1/tts"

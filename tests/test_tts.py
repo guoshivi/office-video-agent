@@ -254,3 +254,85 @@ def test_synthesize_sends_spoken_text_to_engine(tmp_path, monkeypatch):
 
     tts.synthesize("位置在D区D19，903。", tmp_path / "a.mp3", provider="edge")
     assert sent == ["位置在D区D一九，九零三。"]
+
+
+def test_price_splits_cut_before_money():
+    """价格数字前切开，垫静音由调用方拼回去。
+
+    「一个月2600，摊到每天87元」连着念会糊成一串，观众抓不住价格。
+    切点必须落在「月租/一个月」这类引导词之后、数字之前。
+    """
+    assert tts.price_splits("一个月2600，摊到每天87元。") == [
+        "一个月", "2600，摊到每天", "87元。",
+    ]
+    assert tts.price_splits("月租6500/月，人均两千六。") == [
+        "月租", "6500/月，人均两千六。",
+    ]
+
+
+def test_price_splits_ignores_non_money_numbers():
+    """只认钱：面积、工位数、隔间、地铁线、房号一律不切。
+
+    满句都是停顿听着像卡带，这条守的是 price_splits 不打过头。
+    """
+    for text in (
+        "今天这套800平，先别急着划走",
+        "这一层能摆下100个工位，过道还宽裕",
+        "隔了3个房间，老板间、会议室、财务都能分开",
+        "位置在D区D一九，九零三",
+        "3号线上盖",
+    ):
+        assert tts.price_splits(text) == [text]
+
+
+def test_price_splits_skips_sentence_start_and_punctuation():
+    """句首的数字垫不了（停顿归上一句管）；标点前不用垫，引擎本来就会停。"""
+    assert tts.price_splits("2.6元/㎡/天，含物业。") == ["2.6元/㎡/天，含物业。"]
+    assert tts.price_splits("摊到每天，87元。") == ["摊到每天，87元。"]
+
+
+def test_price_splits_caps_at_two_cuts():
+    """一句最多两刀：价格多半在句尾，切出三段就是切错了。"""
+    text = "月租6500/月，押金10000，物业费2.6元/㎡/天。"
+    assert len(tts.price_splits(text)) <= 3
+
+
+def test_price_splits_cut_before_money():
+    """价格数字前切开，垫静音由调用方拼回去。
+
+    「一个月2600，摊到每天87元」连着念会糊成一串，观众抓不住价格。
+    切点必须落在「月租/一个月」这类引导词之后、数字之前。
+    """
+    assert tts.price_splits("一个月2600，摊到每天87元。") == [
+        "一个月", "2600，摊到每天", "87元。",
+    ]
+    assert tts.price_splits("月租6500/月，人均两千六。") == [
+        "月租", "6500/月，人均两千六。",
+    ]
+
+
+def test_price_splits_ignores_non_money_numbers():
+    """只认钱：面积、工位数、隔间、地铁线、房号一律不切。
+
+    满句都是停顿听着像卡带，这条守的是 price_splits 不打过头。
+    """
+    for text in (
+        "今天这套800平，先别急着划走",
+        "这一层能摆下100个工位，过道还宽裕",
+        "隔了3个房间，老板间、会议室、财务都能分开",
+        "位置在D区D一九，九零三",
+        "3号线上盖",
+    ):
+        assert tts.price_splits(text) == [text]
+
+
+def test_price_splits_skips_sentence_start_and_punctuation():
+    """句首的数字垫不了（停顿归上一句管）；标点前不用垫，引擎本来就会停。"""
+    assert tts.price_splits("2.6元/㎡/天，含物业。") == ["2.6元/㎡/天，含物业。"]
+    assert tts.price_splits("摊到每天，87元。") == ["摊到每天，87元。"]
+
+
+def test_price_splits_caps_at_two_cuts():
+    """一句最多两刀：价格多半在句尾，切出三段就是切错了。"""
+    text = "月租6500/月，押金10000，物业费2.6元/㎡/天。"
+    assert len(tts.price_splits(text)) <= 3

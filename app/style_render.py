@@ -135,6 +135,109 @@ def _has_audio(path: Path) -> bool:
 
 # ------------------------------------------------------------------ 文案转语音
 
+# 价格数字前垫的静音长度：0.25 秒——一拍不长不短，念完引导词正好换气
+PRICE_PAUSE = 0.25
+
+
+def _trim_silence(src: Path, dst: Path, lead: float = 0.05, tail: float = 0.08) -> bool:
+    """掐头去尾。失败/掐过头时返回 False，调用方用原文件兜底。
+
+    edge-tts 每段自带 ~0.17 秒头部空白和 0.5~1.2 秒尾部空白
+    （实测「一个月」三个字给了 1.87 秒）。不掐的话：
+    - 价格前垫 0.25 秒，垫出来是 1.5 秒的洞；
+    - 句间停顿全被这些空白吃掉，「停顿按语义给」成了一句空话。
+    start_silence 各留一点点头尾，让声音不贴着上一拍出来。
+    """
+    chain = (
+        f"silenceremove=start_periods=1:start_threshold=-40dB:start_silence={lead},"
+        "areverse,"
+        f"silenceremove=start_periods=1:start_threshold=-40dB:start_silence={tail},"
+        "areverse"
+    )
+    completed = subprocess.run(
+        [_ffmpeg(), "-y", "-hide_banner", "-loglevel", "error", "-i", str(src),
+         "-af", chain, "-c:a", "libmp3lame", "-q:a", "4", str(dst)],
+        capture_output=True, text=True, check=False,
+    )
+    if completed.returncode != 0 or not dst.is_file() or dst.stat().st_size == 0:
+        return False
+    try:
+        return media_duration(dst) >= 0.15
+    except RenderError:
+        return False
+
+
+def _concat_speech(pieces: list[Path], out_path: Path, pause: float = PRICE_PAUSE) -> Path:
+    """把分段口播中间垫静音接成一句。
+
+    静音用 anullsrc 现造（atrim 截到 pause 秒），不用预生成静音文件——
+    垫的时长以后要调，改一个常量就行。
+    """
+    if len(pieces) < 2:
+        raise RenderError("分段拼接至少要两段音频")
+    inputs: list[str] = []
+    for piece in pieces:
+        inputs += ["-i", str(piece)]
+    chains: list[str] = []
+    labels: list[str] = []
+    for index in range(len(pieces)):
+        chains.append(f"[{index}:a]aresample=48000,aformat=channel_layouts=stereo[a{index}]")
+        labels.append(f"[a{index}]")
+        if index < len(pieces) - 1:
+            chains.append(f"anullsrc=r=48000:cl=stereo,atrim=0:{pause:.2f}[p{index}]")
+            labels.append(f"[p{index}]")
+    chains.append("".join(labels) + "concat=n=%d:v=0:a=1[out]" % len(labels))
+    completed = subprocess.run(
+        [_ffmpeg(), "-y", "-hide_banner", "-loglevel", "error", *inputs,
+         "-filter_complex", ";".join(chains), "-map", "[out]",
+         "-c:a", "libmp3lame", "-q:a", "4", str(out_path)],
+        capture_output=True, text=True, check=False,
+    )
+    if completed.returncode != 0 or not out_path.is_file():
+        raise RenderError(f"分段口播拼接失败：{completed.stderr[-200:]}")
+
+
+# 一句最多比自然节奏多喘这么多秒。目标时长比内容长时靠它兜住节奏
+MAX_BREATH = 1.0
+
+
+def _sentence_windows(spoken: list[float], pauses: list[float], goal: float | None) -> list[float]:
+    """每句的时间窗。恒 ≥ 语音+停顿；多出来的呼吸均摊，但有上限。
+
+    没有上限时，17 秒的内容硬拉到 30 秒目标，每个句间都是 2 秒多的空洞——
+    观众在第一个空洞就划走了，比成片短一点伤得多。内容不够就短一点。
+    """
+    count = len(spoken)
+    if not count:
+        return []
+    natural = sum(s + p for s, p in zip(spoken, pauses))
+    share = 0.0
+    if goal and goal > natural:
+        share = min((goal - natural) / count, MAX_BREATH)
+    return [s + p + share for s, p in zip(spoken, pauses)]
+
+
+def _pause_after(index: int, count: int, text: str) -> float:
+    """说完这句，下一句开口前停多久。
+
+    以前固定 0.6 秒一刀切：钩子刚说完下一句就抢着开口，收尾那句前
+    也没留拍。按语义给——钩子留一拍让人决定不划走，收尾前留一拍
+    让人把前面听进去，问句/叹句比陈述句停得长，从句只是喘口气。
+    """
+    if index + 1 >= count:      # 最后一句：尾留一点呼吸给定格帧
+        return 0.4
+    if index == 0:              # 钩子说完留一拍
+        return 0.75
+    if index + 2 == count:      # 收尾前留一拍
+        return 0.7
+    tail = (text or "").rstrip()[-1:]
+    if tail in "！？":
+        return 0.65
+    if tail in "，、；":
+        return 0.35
+    return 0.5
+
+
 def synth_speech(
     text: str,
     out_path: Path,
@@ -142,18 +245,30 @@ def synth_speech(
     rate: str = TTS_RATE,
     voice_key: str = "",
 ) -> Path:
-    """合成一句口播。断句用逗号喂给 TTS，停顿会更自然。
+    """合成一句口播，返回掐头去尾后的音频。
 
+    edge-tts 每段自带 0.17s 头 / 0.5~1.2s 尾的空白，先掐掉再进时间轴，
+    句间停顿和价格前的垫才作数。句子里出现价格时按金额切点分段合成，
+    中间垫 PRICE_PAUSE 秒静音——「一个月2600」连着念会糊成一串。
     真正的合成在 app/tts.py：配了火山凭据就用豆包音色，没配或调用失败
     自动退回 edge-tts。voice 是 edge 的音色名，voice_key 是女/男预设，
     用来映射豆包那边的 speaker id。
     """
-    tts.synthesize(
-        text, out_path,
-        voice_key=voice_key or "female_warm",
-        edge_voice=voice,
-        rate=rate,
-    )
+    segments: list[Path] = []
+    for number, piece in enumerate(tts.price_splits(text) or [text]):
+        raw = out_path.parent / f"{out_path.stem}_raw{number}.mp3"
+        tts.synthesize(
+            piece, raw,
+            voice_key=voice_key or "female_warm",
+            edge_voice=voice,
+            rate=rate,
+        )
+        tight = out_path.parent / f"{out_path.stem}_t{number}.mp3"
+        segments.append(tight if _trim_silence(raw, tight) else raw)
+    if len(segments) == 1:
+        shutil.copyfile(segments[0], out_path)
+    else:
+        _concat_speech(segments, out_path)
     if not out_path.is_file() or out_path.stat().st_size == 0:
         raise RenderError(f"语音合成失败：{text[:20]}")
     return out_path
@@ -741,16 +856,21 @@ def render_storyboard(
             "spoken": spoken,
         })
 
-    natural = sum(sentence["spoken"] + 0.6 for sentence in sentences) if want_voice else 0.0
     if want_voice:
-        # 有目标时长就按目标铺：短文案多留空镜呼吸，长文案不硬压
-        goal = max(goal_seconds or 0.0, natural)
-        per = goal / max(len(sentences), 1)
-        # 每句 10 秒是"别让一个镜头干等"的上限，但它不能跟目标时长打架：
-        # 目标 45 秒、只剩 4 句时，per=11.25，硬按 10 秒卡就只剩 40 秒。
-        cap = max(10.0, per)
-        for sentence in sentences:
-            sentence["duration"] = min(max(sentence["spoken"] + 0.6, per), cap)
+        count = len(sentences)
+        # 句间停顿按语义给，替换掉以前固定 0.6 一刀切：
+        # 钩子说完要留拍、收尾前要留拍、从句只喘口气。
+        for index, sentence in enumerate(sentences):
+            sentence["pause_after"] = _pause_after(index, count, sentence["text"])
+        # 窗口恒 ≥ 语音+停顿（下一句不会跟这句叠上）；目标时长的呼吸有上限，
+        # 内容不够就短一点，不硬拉出满片空洞
+        windows = _sentence_windows(
+            [s["spoken"] for s in sentences],
+            [s["pause_after"] for s in sentences],
+            goal_seconds,
+        )
+        for sentence, window in zip(sentences, windows):
+            sentence["duration"] = window
     else:
         duration_total = video_duration(source)
         even = min(max((goal_seconds or duration_total / max(len(storyboard), 1)), 1.6), 10.0)
