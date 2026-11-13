@@ -190,6 +190,30 @@ def pack_dir(template_id: str) -> Path:
     return TEMPLATE_DIR / template_id
 
 
+def reapply_scenes(spec: dict) -> dict:
+    """把 spec.scenes 的语义写回 shots。
+
+    出包和重拆之后要调一次：`scenes` 是镜头级的（人看的），
+    `shots` 是句子级的（机器拆的），两者必须对上，否则套用时拿到的是旧角色。
+    """
+    by_scene = {
+        int(item.get("scene") or 0): item
+        for item in spec.get("scenes") or []
+        if int(item.get("scene") or 0)
+    }
+    if not by_scene:
+        return spec
+    for shot in spec.get("shots") or []:
+        item = by_scene.get(int(shot.get("scene") or 0))
+        if not item:
+            continue
+        for key in ("role", "subject", "why"):
+            value = str(item.get(key) or "").strip()
+            if value:
+                shot[key] = value
+    return spec
+
+
 def build_pack(template_id: str, *, force: bool = False) -> dict:
     """生成读图包：拼图 + checklist.json。已有 spec 就复用，不重跑拆解。"""
     directory = pack_dir(template_id)
@@ -203,9 +227,10 @@ def build_pack(template_id: str, *, force: bool = False) -> dict:
         raise ReviewPackError("参考视频文件已丢失，请重新上传")
 
     spec: dict = {}
-    if row["spec_json"] and not force:
+    previous_json = row["spec_json"]
+    if previous_json and not force:
         try:
-            spec = json.loads(row["spec_json"])
+            spec = json.loads(previous_json)
         except ValueError:
             spec = {}
     if not spec.get("shots"):
@@ -213,6 +238,10 @@ def build_pack(template_id: str, *, force: bool = False) -> dict:
             spec = analyze_file(source)
         except RefVideoError as error:
             raise ReviewPackError(str(error)) from error
+        # 重拆保留人工标过的镜头语义，不然人点了四格又白点
+        from .refvideo import restore_review
+
+        spec = restore_review(spec, previous_json)
         with transaction() as connection:
             connection.execute(
                 """UPDATE style_templates SET status='ready', spec_json=?, duration_s=?,
@@ -231,6 +260,7 @@ def build_pack(template_id: str, *, force: bool = False) -> dict:
     # 给每句标上属于第几镜：复核按镜头给语义，回填时得知道下发给谁
     for shot in spec.get("shots") or []:
         shot["scene"] = _scene_of(float(shot.get("start") or 0), spans)
+    reapply_scenes(spec)
     with transaction() as connection:
         connection.execute(
             "UPDATE style_templates SET spec_json=? WHERE id=?", (json_dumps(spec), template_id)
@@ -280,23 +310,40 @@ def apply_review(
         raise ReviewPackError("模板还没有分镜结构，先跑一次拆解")
 
     # 第一层：镜头语义
-    scene_map = {int(item.get("scene") or 0): item for item in (scenes or []) if int(item.get("scene") or 0)}
+    # 已有语义先读出来，再把新填的合进去。不能整体替换：页面上一次只改一格角色，
+    # 整体替换会把其他格的 subject/why 全清空（这坑踩过一次，结构占比直接掉一半）。
+    scene_map: dict[int, dict] = {
+        int(item.get("scene") or 0): dict(item)
+        for item in spec.get("scenes") or []
+        if int(item.get("scene") or 0)
+    }
+    for item in scenes or []:
+        index = int(item.get("scene") or 0)
+        if index <= 0:
+            continue
+        merged = scene_map.get(index) or {"scene": index}
+        for key in ("subject", "role", "why"):
+            value = str(item.get(key) or "").strip()
+            if value:
+                merged[key] = value
+        scene_map[index] = merged
+
     touched = 0
+    for shot in shots_list:
+        item = scene_map.get(int(shot.get("scene") or 0))
+        if not item:
+            continue
+        subject = str(item.get("subject") or "").strip()
+        role = str(item.get("role") or "").strip()
+        why = str(item.get("why") or "").strip()
+        if subject:
+            shot["subject"] = subject[:20]
+        if role:
+            shot["role"] = role
+        if why:
+            shot["why"] = why[:80]
+        touched += 1
     if scene_map:
-        for shot in shots_list:
-            item = scene_map.get(int(shot.get("scene") or 0))
-            if not item:
-                continue
-            subject = str(item.get("subject") or "").strip()
-            role = str(item.get("role") or "").strip()
-            why = str(item.get("why") or "").strip()
-            if subject:
-                shot["subject"] = subject[:20]
-            if role:
-                shot["role"] = role
-            if why:
-                shot["why"] = why[:80]
-            touched += 1
         # 镜头语义单独存一份：短的收尾镜可能一句台词都没有，
         # 只挂在台词上的角色会整镜消失，结构占比就缺了一块
         spec["scenes"] = [

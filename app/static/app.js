@@ -1949,6 +1949,21 @@ const ROLE_LABEL = {
   spot: "卖点", 价格: "价格", 收尾: "收尾", 开头: "开头", 家具: "家具",
 };
 
+// 每镜是什么——这个下拉是这套系统里唯一需要人眼的地方。
+// 空镜素材没有台词，画面是唯一信息源；机器只能按看房骨架猜顺序，
+// 猜不出"第 3 格其实是窗户"。所以留一排下拉让人点两下，不点也能出片。
+// 不设"未标"项：骨架总会给一个角色，留空选项反而会让人以为能清掉。
+const SCENE_ROLE_OPTIONS = [
+  ["area", "空地 / 面积"],
+  ["zone", "分区 / 走廊"],
+  ["furn", "工位 / 家具"],
+  ["light", "采光 / 窗景"],
+  ["boss", "独立间 / 老板间"],
+  ["value", "价格 / 性价比"],
+  ["hook", "开头钩子"],
+  ["cta", "收尾引导"],
+];
+
 async function loadLibrary() {
   const grid = $("#library-grid");
   grid.innerHTML = `<div class="library-empty">正在读取视频库…</div>`;
@@ -2053,6 +2068,56 @@ function renderTemplateDetail(detail, pack) {
     `<option value="${escapeHtml(task.id)}">${escapeHtml(task.task_no)} · ${escapeHtml(task.property_label || "")}</option>`
   ).join("");
 
+  // 镜头级信息。下拉按镜头改，不按句子改：一条片子可能 8 个镜头 17 句台词，
+  // 按句子给角色会出现"改了这一句、另外三句还是老角色"的怪状态。
+  const sceneInfo = new Map();
+  shots.forEach((shot) => {
+    const key = Number(shot.scene || 0);
+    if (!key) return;
+    const start = Number(shot.start || 0);
+    const end = start + Number(shot.seconds || 0);
+    const item = sceneInfo.get(key) || { scene: key, start, end };
+    item.start = Math.min(item.start, start);
+    item.end = Math.max(item.end, end);
+    sceneInfo.set(key, item);
+  });
+  (spec.scenes || []).forEach((item) => {
+    const key = Number(item.scene || 0);
+    if (!key) return;
+    const merged = sceneInfo.get(key) || { scene: key, start: 0, end: 0 };
+    if (item.role) merged.role = item.role;
+    if (item.subject) merged.subject = item.subject;
+    sceneInfo.set(key, merged);
+  });
+  shots.forEach((shot) => {
+    const item = sceneInfo.get(Number(shot.scene || 0));
+    if (item && !item.role && shot.role) item.role = shot.role;
+  });
+  const scenes = [...sceneInfo.values()].sort((a, b) => a.scene - b.scene);
+  const knownRoles = new Set(SCENE_ROLE_OPTIONS.map(([value]) => value));
+
+  const scenePicks = scenes.length > 1 ? `
+      <div class="scene-picks">
+        <h4>每镜拍的是什么<span class="scene-picks-note">点一下改，文案才会说对重点（不改也能出片）</span></h4>
+        <div class="scene-pick-row">
+          ${scenes.map((item) => {
+            const current = item.role || "";
+            const extra = current && !knownRoles.has(current)
+              ? `<option value="${escapeHtml(current)}" selected>${escapeHtml(current)}</option>` : "";
+            return `
+            <label class="scene-pick">
+              <span class="scene-pick-head">#${item.scene} · ${Math.max(item.end - item.start, 0).toFixed(1)}s</span>
+              <select class="input" data-scene-role="${item.scene}" data-template="${escapeHtml(detail.id)}">
+                ${extra}
+                ${SCENE_ROLE_OPTIONS.map(([value, label]) =>
+                  `<option value="${value}"${current === value ? " selected" : ""}>${label}</option>`
+                ).join("")}
+              </select>
+            </label>`;
+          }).join("")}
+        </div>
+      </div>` : "";
+
   $("#library-detail").innerHTML = `
     <div class="panel template-detail">
       <div class="template-detail-head">
@@ -2071,6 +2136,8 @@ function renderTemplateDetail(detail, pack) {
       </div>
 
       ${pack ? `<div class="template-grid-wrap"><img src="/api/templates/${detail.id}/grid.jpg?t=${Date.now()}" alt="镜头拼图"></div>` : ""}
+
+      ${scenePicks}
 
       <div class="template-columns">
         <div>
@@ -2181,6 +2248,28 @@ $("#library-detail").addEventListener("click", async (event) => {
     toast(`套用失败：${error.message}`, true);
   } finally {
     button.disabled = false;
+  }
+});
+
+$("#library-detail").addEventListener("change", async (event) => {
+  const select = event.target.closest("[data-scene-role]");
+  if (!select || !select.value) return;
+  const templateId = select.dataset.template;
+  const scene = Number(select.dataset.sceneRole);
+  select.disabled = true;
+  try {
+    await api(`/api/templates/${templateId}/review`, {
+      method: "PUT",
+      body: JSON.stringify({ scenes: [{ scene, role: select.value }] }),
+    });
+    // 只改了角色：重拉详情刷结构占比，不重跑拆解、不重出拼图
+    const detail = await api(`/api/templates/${templateId}`);
+    const pack = await api(`/api/templates/${templateId}/pack`, { method: "POST" }).catch(() => null);
+    renderTemplateDetail(detail, pack);
+    toast("记下了，套用文案时会按这个角色说");
+  } catch (error) {
+    toast(`保存失败：${error.message}`, true);
+    select.disabled = false;
   }
 });
 

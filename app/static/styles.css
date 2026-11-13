@@ -2115,3 +2115,22 @@ kbd {
   border: 1px solid rgba(255, 176, 32, 0.24);
 }
 .template-warnings p { margin: 0; font-size: 12.5px; color: var(--amber); line-height: 1.6; }
+
+/* ---- 每镜是什么：人工标角色的下拉条 ---- */
+/* 一排横向格子，和上面的拼图逐格对应，改一格不影响其他格 */
+.scene-picks { margin: 0 0 18px; }
+.scene-picks h4 { margin: 0 0 9px; font-size: 13px; font-weight: 600; color: var(--text-2); }
+.scene-picks-note { margin-left: 8px; font-size: 11.5px; font-weight: 400; color: var(--text-3); }
+.scene-pick-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: 10px;
+}
+.scene-pick { display: grid; gap: 5px; min-width: 0; }
+.scene-pick-head {
+  font-size: 11.5px;
+  color: var(--text-3);
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.scene-pick select { height: 32px; font-size: 12.5px; width: 100%; }

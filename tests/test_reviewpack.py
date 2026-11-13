@@ -390,3 +390,130 @@ def test_spec_spans_ignores_lines_as_spans():
     }
     spans = spec_spans(spec)
     assert len(spans) == 3
+
+
+# ------------------------------------------------------ 逐格改角色不许清空别的格
+
+def _seed_template(template_id: str) -> None:
+    from app.db import init_db, json_dumps, transaction, utc_now
+
+    init_db()
+    spec = {
+        "duration": 7.5,
+        "cuts": [],
+        "shots": [
+            {"index": 1, "role": "hook", "start": 0.0, "end": 2.5, "seconds": 2.5, "sample": "", "words": 0, "scene": 1},
+            {"index": 2, "role": "area", "start": 2.5, "end": 5.0, "seconds": 2.5, "sample": "", "words": 0, "scene": 2},
+            {"index": 3, "role": "zone", "start": 5.0, "end": 7.5, "seconds": 2.5, "sample": "", "words": 0, "scene": 3},
+        ],
+    }
+    with transaction() as connection:
+        connection.execute("DELETE FROM style_templates WHERE id=?", (template_id,))
+        connection.execute(
+            """INSERT INTO style_templates(id,name,source_type,source_path,status,spec_json,created_at,updated_at)
+               VALUES(?,?,'upload',?,'ready',?,?,?)""",
+            (template_id, "测试片", "x.mp4", json_dumps(spec), utc_now(), utc_now()),
+        )
+
+
+def _scenes_of(template_id: str) -> dict:
+    import json
+
+    from app.db import transaction
+
+    with transaction() as connection:
+        row = connection.execute(
+            "SELECT spec_json FROM style_templates WHERE id=?", (template_id,)
+        ).fetchone()
+    return {int(item["scene"]): item for item in (json.loads(row[0]).get("scenes") or [])}
+
+
+def test_review_one_scene_keeps_others():
+    """页面上一次只改一格角色，其他格已经填好的 subject/why 不能丢。
+
+    回归用：以前 apply_review 直接拿传入的 scenes 整体替换 spec["scenes"]，
+    改一格会把另外几格的语义全清空，结构占比跟着掉。
+    """
+    from app.reviewpack import apply_review
+
+    _seed_template("t_keep")
+    apply_review("t_keep", scenes=[
+        {"scene": 1, "subject": "空地全景", "role": "area", "why": "先给体量"},
+        {"scene": 2, "subject": "走廊隔断", "role": "zone", "why": "带进独立区"},
+    ])
+    apply_review("t_keep", scenes=[{"scene": 2, "role": "light"}])
+
+    scenes = _scenes_of("t_keep")
+    assert scenes[1]["subject"] == "空地全景"
+    assert scenes[1]["role"] == "area"
+    assert scenes[1]["why"] == "先给体量"
+    assert scenes[2]["subject"] == "走廊隔断"   # 只改 role，subject 留着
+    assert scenes[2]["role"] == "light"
+
+
+def test_review_structure_follows_new_role():
+    """改完角色，结构占比要跟着变，不能还按老角色算。"""
+    from app.reviewpack import apply_review
+
+    _seed_template("t_struct")
+    result = apply_review("t_struct", scenes=[{"scene": 1, "role": "light"}])
+    roles = {item["role"] for item in result["structure"]}
+    assert "light" in roles
+    total = sum(item["seconds"] for item in result["structure"])
+    assert abs(total - 7.5) <= 0.3
+
+
+def test_restore_review_keeps_scenes_on_redetect():
+    """重拆不能把人标过的镜头语义冲掉——机器拆不出"这镜拍的是什么"。
+
+    回归用：build_pack(force=True) 会把 spec 清空重拆，四格人工标注全丢，
+    下拉退回骨架猜的 hook/area/zone/cta。
+    """
+    import json
+
+    from app.refvideo import restore_review
+
+    previous = json.dumps({
+        "scenes": [
+            {"scene": 1, "subject": "空地全景", "role": "area", "why": "先给体量"},
+            {"scene": 2, "subject": "带窗独立间", "role": "light", "why": "采光是卖点"},
+        ],
+        "summary": "人写的结论",
+    })
+    # 一镜到底、等分 2 段，跟旧标注的段数对得上
+    fresh = {
+        "duration": 5.0,
+        "cuts": [],
+        "shots": [
+            {"index": 1, "start": 0.0, "end": 2.5, "seconds": 2.5, "synthetic": True},
+            {"index": 2, "start": 2.5, "end": 5.0, "seconds": 2.5, "synthetic": True},
+        ],
+    }
+    spec = restore_review(fresh, previous)
+    assert [item["role"] for item in spec["scenes"]] == ["area", "light"]
+    assert spec["summary"] == "人写的结论"
+
+
+def test_restore_review_drops_scenes_when_segment_count_changed():
+    """换了条片子（段数对不上）就不能沿用，否则角色会按错位置。"""
+    import json
+
+    from app.refvideo import restore_review
+
+    previous = json.dumps({"scenes": [{"scene": 1, "role": "area"}, {"scene": 2, "role": "light"}]})
+    fresh = {"duration": 2.0, "cuts": [], "shots": [{"index": 1, "start": 0.0, "end": 2.0, "seconds": 2.0}]}
+    spec = restore_review(fresh, previous)
+    assert "scenes" not in spec
+
+
+def test_reapply_scenes_writes_role_back_to_shots():
+    """出包标完段号后，镜头语义要写回 shots，否则套用时拿到旧角色。"""
+    from app.reviewpack import reapply_scenes
+
+    spec = {
+        "scenes": [{"scene": 1, "role": "light", "subject": "带窗独立间"}],
+        "shots": [{"index": 1, "scene": 1, "role": "hook", "start": 0, "seconds": 2.5}],
+    }
+    reapply_scenes(spec)
+    assert spec["shots"][0]["role"] == "light"
+    assert spec["shots"][0]["subject"] == "带窗独立间"

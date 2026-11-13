@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import tempfile
@@ -535,6 +536,52 @@ def analyze_file(path: Path) -> dict:
     return spec
 
 
+def restore_review(spec: dict, previous_json: str | None) -> dict:
+    """重拆时把人工复核过的镜头语义接回去。
+
+    重拆能算出来的只有切点、时长、字幕；"这镜拍的是什么"是人看画面标的，
+    机器再拆一次也拆不出来。以前重拆会把它整份冲掉，人标了四格全丢。
+    段数对得上就沿用，对不上（换了条片子）就作废，免得把角色按错位置。
+    """
+    if not previous_json:
+        return spec
+    try:
+        previous = json.loads(previous_json)
+    except ValueError:
+        return spec
+
+    scenes = previous.get("scenes") or []
+    if not scenes:
+        return spec
+
+    from .reviewpack import spec_spans
+
+    count = len(spec_spans(spec))
+    # 段数必须完全一致才沿用。只对上几条就"部分保留"更危险：
+    # 段数变了说明分割方式变了，硬塞会把角色标到错的画面上。
+    if len(scenes) != count:
+        return spec
+    kept = [item for item in scenes if 0 < int(item.get("scene") or 0) <= count]
+    if not kept:
+        return spec
+
+    spec["scenes"] = kept
+    if previous.get("summary"):
+        spec["summary"] = previous["summary"]
+    if previous.get("reviewed"):
+        spec["reviewed"] = previous["reviewed"]
+
+    # 标段号 + 把语义写回 shots：只塞 scenes 不够，套用时读的是 shots 的 role，
+    # 不写回就会一边显示"采光"一边按骨架的 hook/zone 去生成文案
+    from .reviewpack import _scene_of, reapply_scenes, spec_spans
+
+    spans = spec_spans(spec)
+    for shot in spec.get("shots") or []:
+        shot["scene"] = _scene_of(float(shot.get("start") or 0), spans)
+    reapply_scenes(spec)
+    return spec
+
+
 def analyze_template(template_id: str) -> dict:
     """后台线程入口：拆解并写回 style_templates。"""
     with transaction() as connection:
@@ -544,6 +591,7 @@ def analyze_template(template_id: str) -> dict:
 
     try:
         spec = analyze_file(Path(row["source_path"]))
+        spec = restore_review(spec, row["spec_json"])
         transcript = "\n".join(shot["sample"] for shot in spec["shots"])
         with transaction() as connection:
             connection.execute(
