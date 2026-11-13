@@ -465,19 +465,17 @@ def toggle_platform(platform: str, enabled: bool) -> dict:
 
 
 def autostart() -> dict:
-    """程序启动时把已启用的发布服务顺手拉起来。
+    """程序启动时把「看不见的后台服务」拉起来。
 
-    不懂电脑的人不会记得"先双击那个黑窗口"。既然他已经把发布开关打开，
-    就当他明天也要发——开机先起好，省掉一次求助。
-    没打开的平台一律不碰，免得平白弹一个浏览器窗口把人吓到。
+    只碰小红书：它是后台进程，起起来没动静。抖音不一样——它要开一个浏览器
+    窗口停在创作者中心，用户没点过任何按钮就弹出来一个网页，只会觉得中病毒了。
+    所以抖音一律等用户点「打开登录页」再开，绝不自动弹。
     """
     settings = get_settings()
     started: dict = {}
     try:
         if settings.get("publish_xhs_enabled") == "1":
             started["xiaohongshu"] = start_xiaohongshu()
-        if settings.get("publish_douyin_enabled") == "1":
-            started["douyin"] = start_douyin()
     except Exception as error:  # noqa: BLE001 - 起不来不影响网页本身能用
         logger.warning("自动启动发布服务失败：%s", error)
     return started

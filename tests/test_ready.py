@@ -223,12 +223,26 @@ def test_autostart_only_touches_enabled_platforms(monkeypatch):
     assert calls == ["xhs"]
 
 
-def test_autostart_swallows_failures(monkeypatch):
-    """起不来只是少个功能，不能让整个网页跟着挂。"""
+def test_autostart_never_opens_the_douyin_browser(monkeypatch):
+    """抖音要开可见窗口，没点按钮就弹出来等于吓人，一律等用户自己点。"""
+    calls = []
+    monkeypatch.setattr(ready, "start_xiaohongshu", lambda: calls.append("xhs") or {"ok": True})
+    monkeypatch.setattr(ready, "start_douyin", lambda: calls.append("dy") or {"ok": True})
+    _enable("xiaohongshu")
     _enable("douyin")
 
-    def boom():
-        raise OSError("chrome missing")
+    started = ready.autostart()
 
-    monkeypatch.setattr(ready, "start_douyin", boom)
+    assert list(started) == ["xiaohongshu"]
+    assert calls == ["xhs"]
+
+
+def test_autostart_swallows_failures(monkeypatch):
+    """起不来只是少个功能，不能让整个网页跟着挂。"""
+    _enable("xiaohongshu")
+
+    def boom():
+        raise OSError("xhs missing")
+
+    monkeypatch.setattr(ready, "start_xiaohongshu", boom)
     assert ready.autostart() == {}
