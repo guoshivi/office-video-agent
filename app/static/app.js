@@ -253,6 +253,25 @@ async function runReadyAction(button) {
     await requestQrcode("xiaohongshu");
     return;
   }
+  if (action === "install_browser") {
+    // 装浏览器替不了，但下载页能替：别让人停在一句「装一个就好」上
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = "打开中…";
+    try {
+      const result = await api("/api/ready/start", {
+        method: "POST",
+        body: JSON.stringify({ target: "install_browser" }),
+      });
+      toast(result.message || "已处理", result.ok === false);
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      button.disabled = false;
+      button.textContent = original;
+    }
+    return;
+  }
 
   const platform = action.includes("douyin") ? "douyin" : "xiaohongshu";
   const original = button.textContent;

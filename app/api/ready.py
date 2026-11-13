@@ -37,6 +37,8 @@ def start_service(payload: StartRequest):
         result = ready.start_douyin()
     elif payload.target == "render_deps":
         result = ready.install_render_deps()
+    elif payload.target == "install_browser":
+        result = ready.open_browser_download()
     else:
         raise HTTPException(400, "不认识这个目标")
     # 起完之后顺带刷新一次体检，前端不用再请求一轮

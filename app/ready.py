@@ -25,6 +25,7 @@ import socket
 import subprocess
 import sys
 import time
+import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -39,6 +40,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 XHS_EXE = BASE_DIR / "vendor" / "xhs-mcp" / "xiaohongshu-mcp.exe"
 CHROME_PROFILE = DATA_DIR / "chrome-profile"
 DOUYIN_UPLOAD_URL = "https://creator.douyin.com/creator-micro/content/upload"
+# 一键修里唯一「我们代替不了」的事：装浏览器。给一个能点的下载页，别只留一句话
+EDGE_DOWNLOAD_URL = "https://www.microsoft.com/zh-cn/edge"
 
 # 本机出片这条链上真正会缺的东西。少任何一个，出片都会以
 # 「子进程退出码 1：No module named xxx」这种话结束——对使用者等于没说。
@@ -100,18 +103,34 @@ def _wait_port(port: int, seconds: float = 20.0) -> bool:
     return False
 
 
-def _find_chrome() -> str:
-    """找本机 Chrome。找不到返回空串，由界面提示"装个 Chrome 就行"。"""
-    candidates = [
-        os.getenv("CHROME_PATH", ""),
-        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
-    ]
-    for candidate in candidates:
-        if candidate and Path(candidate).is_file():
-            return candidate
-    return ""
+def _find_browser() -> tuple[str, str]:
+    """找到能挂调试端口的浏览器，返回 (路径, 名字)，找不到就是 ("", "")。
+
+    先 Chrome 再 Edge。Edge 是 Windows 10/11 自带的 Chromium，同样能开
+    远程调试端口——为了发布先去装 Chrome，等于在不需要的地方设门槛。
+    """
+    override = os.getenv("CHROME_PATH", "").strip()
+    if override and Path(override).is_file():
+        return override, "Chrome"
+
+    candidates = (
+        ("Chrome", (
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe",
+        )),
+        ("Edge", (
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+            r"%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe",
+        )),
+    )
+    for label, paths in candidates:
+        for raw in paths:
+            path = os.path.expandvars(raw)
+            if Path(path).is_file():
+                return path, label
+    return "", ""
 
 
 # ------------------------------------------------------------------ 体检
@@ -229,11 +248,11 @@ def _douyin_item(settings: dict, status: dict) -> Item:
             action="enable_douyin", action_label="打开抖音发布",
             optional=True,
         )
-    if not _find_chrome():
+    if not _find_browser()[0]:
         return Item(
             "douyin", "发抖音", False,
-            "这台电脑上没找到 Chrome，装一个就好",
-            action="", action_label="",
+            "这台电脑上没有能用的浏览器。点一下帮你打开下载页，装完回来点「重新检查」",
+            action="install_browser", action_label="打开下载页",
         )
     if not status.get("reachable"):
         return Item(
@@ -382,15 +401,18 @@ def start_douyin() -> dict:
     """打开专用浏览器窗口。这个窗口就是"发布用的那个浏览器"，别手关。"""
     if _port_open(CDP_PORT):
         return {"ok": True, "message": "发布用的浏览器已经开着"}
-    chrome = _find_chrome()
-    if not chrome:
-        return {"ok": False, "message": "这台电脑上没找到 Chrome，装一个就好"}
+    browser, label = _find_browser()
+    if not browser:
+        return {
+            "ok": False,
+            "message": "这台电脑上没找到 Chrome 或 Edge，先点「打开下载页」装一个",
+        }
 
     CHROME_PROFILE.mkdir(parents=True, exist_ok=True)
     try:
         subprocess.Popen(
             [
-                chrome,
+                browser,
                 f"--user-data-dir={CHROME_PROFILE}",
                 f"--remote-debugging-port={CDP_PORT}",
                 "--no-first-run",
@@ -404,11 +426,26 @@ def start_douyin() -> dict:
         return {"ok": False, "message": f"启动失败：{error}"}
 
     if _wait_port(CDP_PORT, seconds=25):
-        return {"ok": True, "message": "浏览器已打开，请在里面登录抖音，然后点「检查一下」"}
+        return {"ok": True, "message": f"浏览器已打开（{label}），请在里面登录抖音，然后点「重新检查」"}
     return {
         "ok": False,
-        "message": "浏览器开了但没连上。如果本来就有 Chrome 窗口开着，把那些窗口都关掉再试一次。",
+        "message": "浏览器开了但没连上。如果本来就有浏览器窗口开着，把那些窗口都关掉再试一次。",
     }
+
+
+def open_browser_download() -> dict:
+    """把 Edge 下载页用系统默认浏览器打开。
+
+    装浏览器这件事我们代替不了，但"下一步该点哪里"必须给到——
+    只留一句「装一个就好」，对不懂电脑的人等于到此为止。
+    """
+    try:
+        opened = webbrowser.open(EDGE_DOWNLOAD_URL)
+    except Exception as error:  # noqa: BLE001
+        return {"ok": False, "message": f"没能打开下载页：{error}"}
+    if not opened:
+        return {"ok": False, "message": f"没能自动打开，在浏览器地址栏输入 {EDGE_DOWNLOAD_URL}"}
+    return {"ok": True, "message": "下载页已经打开了，装完回来说一声，再点「重新检查」"}
 
 
 def toggle_platform(platform: str, enabled: bool) -> dict:

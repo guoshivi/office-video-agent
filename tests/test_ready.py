@@ -65,20 +65,35 @@ def test_xhs_ready():
     assert item.optional is False
 
 
-def test_douyin_without_chrome_explains_what_to_install(monkeypatch):
+def test_douyin_without_browser_offers_download_page(monkeypatch):
+    """一个浏览器都没装时，不能只留一句话——得给一个能点的下载入口。"""
     _enable("douyin")
-    monkeypatch.setattr(ready, "_find_chrome", lambda: "")
+    monkeypatch.setattr(ready, "_find_browser", lambda: ("", ""))
     from app.db import get_settings
 
     item = ready._douyin_item(get_settings(), {"reachable": False})
     assert item.ok is False
-    assert "Chrome" in item.detail
-    assert item.action == ""              # 装浏览器这件事我们代替不了
+    assert "下载页" in item.detail
+    assert item.action == "install_browser"
+    assert item.action_label
+
+
+def test_douyin_uses_edge_when_chrome_missing(monkeypatch):
+    """Windows 自带 Edge 也是 Chromium，能挂调试端口——不该逼人先去装 Chrome。"""
+    _enable("douyin")
+    monkeypatch.setattr(
+        ready, "_find_browser", lambda: (r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe", "Edge")
+    )
+    from app.db import get_settings
+
+    item = ready._douyin_item(get_settings(), {"reachable": False})
+    assert item.ok is False
+    assert item.action == "start_douyin"          # 有浏览器 = 有下一步，不是死路
 
 
 def test_douyin_up_but_logged_out_opens_login_page(monkeypatch):
     _enable("douyin")
-    monkeypatch.setattr(ready, "_find_chrome", lambda: r"C:\chrome.exe")
+    monkeypatch.setattr(ready, "_find_browser", lambda: (r"C:\chrome.exe", "Chrome"))
     from app.db import get_settings
 
     item = ready._douyin_item(get_settings(), {"reachable": True, "logged_in": False})
