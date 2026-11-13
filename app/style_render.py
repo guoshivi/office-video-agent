@@ -79,6 +79,10 @@ ZOOM_IN = 0.12             # 最大推近幅度
 CANVAS_W, CANVAS_H = 1080, 1920
 CANVAS_WIDE_W, CANVAS_WIDE_H = 1920, 1080
 
+# 镜头间的叠化时长。叠化会「吃掉」相邻两段各一半的交界时间，所以除末段外
+# 每段都要多渲染这么长——总时长和音轨、字幕严丝合缝，一点不短。
+XFADE = 0.20
+
 
 class RenderError(RuntimeError):
     pass
@@ -572,10 +576,13 @@ def _zoom_filter(item: dict, index: int, fps: int, canvas: tuple[int, int] = (CA
 
     zoompan 交替缓推/缓拉：偶数句推近（1.00→1.12），奇数句拉远
     （1.12→1.00）。先放大 1.25 倍做工作分辨率，推拉时不会露边。
+
+    时长按 render_span 走：非末段比句子窗口多 XFADE 秒，供叠化吃掉，
+    总长才不会短于音轨。
     """
     width, height = canvas
     clip_start, clip_end = item["clip"]
-    duration = max(item["end"] - item["start"], 0.5)
+    duration = max(float(item.get("render_span") or (item["end"] - item["start"])), 0.5)
     frames = max(int(duration * fps), 8)
     step = ZOOM_IN / frames
     if index % 2 == 0:
@@ -593,6 +600,37 @@ def _zoom_filter(item: dict, index: int, fps: int, canvas: tuple[int, int] = (CA
         f"eq=brightness=0.02:saturation=1.10:contrast=1.04,"
         f"setsar=1"
     )
+
+
+# ------------------------------------------------------------------ 镜头衔接
+
+
+def _xfade_lines(plan: list[dict], final: str = "[base]") -> list[str]:
+    """把 [v0]..[vN-1] 串成叠化链，最后一行的输出就是 final。
+
+    每段在渲染时长里多备了 extra 秒，叠化从上一段的窗口末尾开始「吃」，
+    总长一分不短——音轨、字幕的时间轴原样不动。
+
+    每个交界的叠化时长自适应：不能超过前段备的余量（xfade 会提前
+    取尽第一路），也不能超过下一段自身的长度（末段没有余量）。
+    前段没备余量的交界退回硬切——实际到不了这一步（非末段都备了
+    至少 span 的一半），留着防极端小窗口把总长撑破。
+    """
+    lines: list[str] = []
+    prev = "[v0]"
+    for k in range(1, len(plan)):
+        span_k = plan[k]["end"] - plan[k]["start"]
+        fade = min(plan[k - 1].get("extra", 0.0), span_k)
+        out = final if k == len(plan) - 1 else f"[x{k}]"
+        if fade >= 0.1:
+            lines.append(
+                f"{prev}[v{k}]xfade=transition=fade:duration={fade:.2f}"
+                f":offset={plan[k - 1]['end']:.2f}{out}"
+            )
+        else:
+            lines.append(f"{prev}[v{k}]concat=n=2:v=1:a=0{out}")
+        prev = out
+    return lines
 
 
 # ------------------------------------------------------------------ 花字层
@@ -783,6 +821,7 @@ def render_storyboard(
     tts_voice_key: str = "female_warm",
     tts_rate: str = TTS_RATE,
     kenburns: bool = True,
+    xfade: bool = True,
     canvas: tuple[int, int] = (CANVAS_W, CANVAS_H),
     goal_seconds: float | None = None,
     flower: bool = True,
@@ -894,6 +933,8 @@ def render_storyboard(
     clips = pick_clips(source, shots_needed)
     plan: list[dict] = []
     clip_index = 0
+    total_pieces = sum(max(1, round(s["duration"] / 3.0)) for s in sentences)
+    piece_no = 0
     for sentence in sentences:
         count = max(1, round(sentence["duration"] / 3.0))
         span = sentence["duration"] / count
@@ -901,14 +942,20 @@ def render_storyboard(
             clip_start, clip_end = clips[clip_index % len(clips)]
             clip_index += 1
             clip_len = clip_end - clip_start
+            # 非末段多渲染一点供叠化吃掉；段太短就按一半封顶，别把镜头溶没了
+            extra = 0.0 if piece_no == total_pieces - 1 else round(min(XFADE, span * 0.5), 2)
+            render_span = span + extra
             plan.append({
                 "start": round(sentence["start"] + piece * span, 2),
                 "end": round(sentence["start"] + (piece + 1) * span, 2),
                 "clip": (clip_start, clip_end),
-                "slow": clip_len / span if span else 1.0,
+                "slow": clip_len / render_span if render_span else 1.0,
                 # 字幕/角标只在句首那个镜头开始前挂，避免每段重复写 drawtext
                 "sentence": sentence if piece == 0 else None,
+                "extra": extra,
+                "render_span": round(render_span, 2),
             })
+            piece_no += 1
 
     # 2) 拼滤镜：截段 → 变速 → Ken Burns → 接力，再叠花字，最后烧字幕角标
     flower_windows = (
@@ -944,8 +991,11 @@ def render_storyboard(
         if hold > 0 and index == len(plan) - 1:
             chain += f",tpad=stop_mode=clone:stop_duration={hold:.2f}"
         video_parts.append(f"[0:v]{chain}[v{index}]")
-    concat_in = "".join(f"[v{i}]" for i in range(len(plan)))
-    video_parts.append(f"{concat_in}concat=n={len(plan)}:v=1:a=0[base]")
+    if len(plan) > 1 and xfade:
+        video_parts += _xfade_lines(plan)
+    else:
+        concat_in = "".join(f"[v{i}]" for i in range(len(plan)))
+        video_parts.append(f"{concat_in}concat=n={len(plan)}:v=1:a=0[base]")
 
     # 2.5) 花字层叠在画面上（不进字幕轨：它带形状和渐变，ASS 画不出来）
     if flower_chains:
@@ -1081,6 +1131,7 @@ def start_render_job(payload: dict) -> dict:
     bgm_volume   原声音量，默认 0.30
     tts_voice / tts_rate  音色与语速
     kenburns     是否推拉运镜，默认开
+    xfade        镜头之间叠化还是硬切，默认叠化
     """
     import threading
     import uuid
@@ -1143,6 +1194,7 @@ def start_render_job(payload: dict) -> dict:
                 tts_voice=str(payload.get("tts_voice") or TTS_VOICE),
                 tts_rate=str(payload.get("tts_rate") or TTS_RATE),
                 kenburns=bool(payload.get("kenburns", True)),
+                xfade=bool(payload.get("xfade", True)),
                 flower=visual["flower"],
                 music_path=visual["music_path"],
                 music_volume=visual["music_volume"],
@@ -1280,6 +1332,7 @@ def _local_audio_visual_settings(task_key: str, task_row=None) -> dict:
         "caption_highlight": _flag(settings, "render_subtitle_highlight"),
         "highlight_source": source if source in {"ai", "rules", "manual"} else "ai",
         "kenburns": _flag(settings, "render_kenburns"),
+        "xfade": _flag(settings, "render_xfade"),
         "tts_rate": _task_value(task_row, "tts_rate") or str(settings.get("render_tts_rate") or "").strip(),
         # 正则兜底：只有「手动【】」不需要
         "caption_highlight_regex": source != "manual",
@@ -1362,6 +1415,7 @@ def render_task_locally(task_row) -> Path:
         caption_highlight=visual["caption_highlight"],
         caption_highlight_regex=visual["caption_highlight_regex"],
         kenburns=visual["kenburns"],
+        xfade=visual["xfade"],
     )
     logger.info("本地出片完成：%s（原声=%s，%.1fs）", out, audio_mode, time.time() - started)
 

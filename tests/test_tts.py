@@ -14,8 +14,11 @@ from app.db import init_db, transaction
 
 
 @pytest.fixture(autouse=True)
-def _clean():
+def _clean(tmp_path, monkeypatch):
     init_db()
+    # 缓存指到临时目录：这是真金白银——清生产的 TTS 缓存等于下次出片
+    # 全部重新合成，按字计费再花一遍钱
+    monkeypatch.setattr(tts, "CACHE_DIR", tmp_path / "tts-cache")
     with transaction() as connection:
         connection.execute("DELETE FROM settings WHERE key LIKE 'tts_%'")
     tts.clear_cache()

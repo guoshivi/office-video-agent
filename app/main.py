@@ -172,6 +172,7 @@ class SettingsUpdate(BaseModel):
     render_subtitle_highlight: str = Field(default="1", max_length=4)
     render_highlight_source: str = Field(default="ai", max_length=10)
     render_kenburns: str = Field(default="1", max_length=4)
+    render_xfade: str = Field(default="1", max_length=4)
     render_tts_rate: str = Field(default="", max_length=10)
     # 配音来源：auto / volcano / edge；其余是火山凭据与音色（留空就走免费配音）
     tts_provider: str = Field(default="auto", max_length=10)
@@ -770,7 +771,8 @@ def update_settings(payload: SettingsUpdate):
         raise HTTPException(400, "渲染引擎只能是 workbench 或 local")
     if values["local_audio_mode"] not in {"mix", "original", "voice", "mute"}:
         raise HTTPException(400, "本地出片原声只能是 mix / original / voice / mute")
-    for flag in ("render_flower", "render_bgm", "render_subtitle_highlight", "render_kenburns"):
+    for flag in ("render_flower", "render_bgm", "render_subtitle_highlight", "render_kenburns",
+                 "render_xfade"):
         if values[flag] not in {"0", "1"}:
             raise HTTPException(400, "花字/背景音乐/重点词/运镜开关只能是 0 或 1")
     if values["render_subtitle_size"] not in {"small", "medium", "large"}:
