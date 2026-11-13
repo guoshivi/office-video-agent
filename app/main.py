@@ -22,6 +22,7 @@ from .channel import (
 from .db import DATA_DIR, UPLOAD_DIR, get_settings, init_db, transaction, utc_now
 from .excel_import import import_excel
 from .feishu.bot import get_bot, start_bot
+from .property_entry import PropertyConflict, PropertyEntryError, create_property as create_property_record
 from .semantic import is_configured, reindex_properties, search_properties, semantic_status
 from .shots import (
     ShotError,
@@ -291,6 +292,41 @@ def list_properties(
             [*params, limit, offset],
         ).fetchall()
     return {"items": [public_property(row) for row in rows], "total": total, "limit": limit, "offset": offset}
+
+
+class PropertyDraft(BaseModel):
+    """手工新增房源的表单。字段和 Excel 里的列名一一对应，只是不用带「原始」后缀。"""
+
+    region: str = Field(default="", max_length=60)
+    building: str = Field(default="", max_length=60)
+    room: str = Field(default="", max_length=60)
+    area: str = Field(default="", max_length=40)
+    partition: str = Field(default="", max_length=40)
+    rent: str = Field(default="", max_length=60)
+    orientation: str = Field(default="", max_length=40)
+    furnishing_layout: str = Field(default="", max_length=120)
+    viewing_commission: str = Field(default="", max_length=200)
+    contact: str = Field(default="", max_length=120)
+    publish_date: str = Field(default="", max_length=40)
+    # 非空 = 用户已经确认要覆盖这一条（前端收到 409 后带上来的 id）
+    overwrite_id: str = Field(default="", max_length=40)
+
+
+@app.post("/api/properties", status_code=201)
+def create_property(payload: PropertyDraft):
+    values = payload.model_dump()
+    overwrite_id = values.pop("overwrite_id", "")
+    try:
+        result = create_property_record(values, overwrite_id=overwrite_id)
+    except PropertyConflict as error:
+        # 409 而不是 400：这不是填错了，是问「要覆盖还是算了」
+        raise HTTPException(
+            409, detail={"message": str(error), "existing": error.existing}
+        ) from error
+    except PropertyEntryError as error:
+        raise HTTPException(400, str(error)) from error
+    # 前端拿到的是和列表页同一套字段（region/room/area…），不是数据库列名
+    return {**result, "property": public_property(result["property"])}
 
 
 @app.get("/api/properties/{property_id}")

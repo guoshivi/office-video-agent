@@ -410,6 +410,8 @@ main {
 }
 .section-heading h3 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
 .section-note { margin: 4px 0 0; font-size: 12.5px; color: var(--text-3); }
+/* 标题右边一组按钮（房源库：导入 Excel + 新增房源） */
+.heading-actions { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
 
 .status-pill {
   display: inline-flex;

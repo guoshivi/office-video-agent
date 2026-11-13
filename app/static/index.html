@@ -155,7 +155,10 @@
         <section class="view" id="view-properties">
           <div class="section-heading">
             <p class="section-note">原始数据不被覆盖，标准化字段只用于搜索与口播。</p>
-            <button class="button button-primary" id="property-import">导入 Excel</button>
+            <div class="heading-actions">
+              <button class="button button-ghost" id="property-import">导入 Excel</button>
+              <button class="button button-primary" id="property-new">新增房源</button>
+            </div>
           </div>
           <div class="toolbar panel">
             <label class="search-box"><span>⌕</span><input id="property-search" placeholder="搜索区域、楼栋、房号或面积"></label>
@@ -518,11 +521,33 @@
   <dialog id="import-dialog">
     <form id="import-form" class="dialog-card">
       <div class="dialog-head"><div><p class="eyebrow">EXCEL IMPORT</p><h3>导入房源数据库</h3></div><button type="button" class="icon-button" data-close="import-dialog">×</button></div>
-      <p class="dialog-description">支持「标题 + 第 2 行表头」的 .xlsx 格式。原文件不会被修改，重复房源不会被自动覆盖。</p>
+      <p class="dialog-description">支持「标题 + 第 2 行表头」的 .xlsx 格式。原文件不会被修改，重复房源不会被自动覆盖。只有一两套房的话，关掉这里，用「新增房源」一条条填更快。</p>
       <label class="drop-zone" id="excel-drop"><input type="file" name="file" accept=".xlsx,.xlsm" required><span class="drop-icon">⇧</span><strong>选择房源 Excel 文件</strong><small>最大 20 MB · 保留字段、颜色和来源行号</small><span id="excel-file-name"></span></label>
       <div class="notice">黄色「新增」和红色「特别标注」会一并导入；门禁、佣金和联系方式只作为受限原始字段保存，不会进入对外文案。</div>
       <div id="import-result" class="import-result hidden"></div>
       <div class="dialog-actions"><button type="button" class="button button-ghost" data-close="import-dialog">取消</button><button class="button button-primary" type="submit">开始导入</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="property-dialog">
+    <form id="property-form" class="dialog-card">
+      <div class="dialog-head"><div><p class="eyebrow">NEW LISTING</p><h3>新增房源</h3></div><button type="button" class="icon-button" data-close="property-dialog">×</button></div>
+      <p class="dialog-description">Excel 里还没有的房，直接在这里补一条。存进去就能在「新建视频任务」里选到，字段口径和导入完全一样。</p>
+      <div class="form-grid">
+        <label>区域<input name="region" maxlength="60" placeholder="例如 南山科技园" autocomplete="off"><small>加上楼栋和房号，这套房才能被搜到。</small></label>
+        <label>楼栋<input name="building" maxlength="60" placeholder="例如 F14" autocomplete="off"></label>
+        <label>房号<input name="room" maxlength="60" placeholder="例如 202" required autocomplete="off"><small>必填。同楼栋同房号会被当成同一套。</small></label>
+        <label>面积（㎡）<input name="area" maxlength="40" placeholder="例如 230 或 230平" required autocomplete="off"><small>必填。写数字，口播要按它算工位和人均。</small></label>
+        <label>隔间<input name="partition" maxlength="40" placeholder="例如 3隔" autocomplete="off"><small>写「3隔」会念成「三个隔间」。</small></label>
+        <label>租金<input name="rent" maxlength="60" placeholder="例如 40 / 35+5 / 40含物业 / 面谈" autocomplete="off"><small>写原文就行，口径和 Excel 一样。</small></label>
+        <label>朝向<input name="orientation" maxlength="40" placeholder="例如 南" autocomplete="off"></label>
+        <label>家具 / 格局<input name="furnishing_layout" maxlength="120" placeholder="例如 精装 3+1，带家具" autocomplete="off"></label>
+        <label class="full">看房备注及中介费<input name="viewing_commission" maxlength="200" placeholder="例如 随时可看，佣金半个月" autocomplete="off"><small>只存本地，不会写进对外文案。</small></label>
+        <label>联系人<input name="contact" maxlength="120" placeholder="谁负责带看" autocomplete="off"></label>
+        <label>房源发布日<input name="publish_date" maxlength="40" placeholder="例如 2026-11-13" autocomplete="off"></label>
+      </div>
+      <div id="property-conflict" class="notice hidden"></div>
+      <div class="dialog-actions"><button type="button" class="button button-ghost" data-close="property-dialog">取消</button><button class="button button-primary" type="submit" id="property-submit">保存房源</button></div>
     </form>
   </dialog>
 

@@ -113,7 +113,15 @@ async function api(path, options = {}) {
   const payload = contentType.includes("application/json") ? await response.json() : null;
   if (!response.ok) {
     const detail = payload?.detail;
-    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail || `请求失败 (${response.status})`));
+    // detail 可能是字符串，也可能是 {message, existing} 这种结构化信息（409 撞房号）。
+    // 后者要留给调用方判断「要不要覆盖」，不能在这里拍平成一行字就丢掉。
+    const message = typeof detail === "string"
+      ? detail
+      : detail?.message || `请求失败 (${response.status})`;
+    const error = new Error(message);
+    error.status = response.status;
+    error.detail = detail;
+    throw error;
   }
   return payload;
 }
@@ -339,12 +347,39 @@ function renderProperties(items, total, emptyTitle = "没有匹配的房源") {
         <td><strong>${escapeHtml([item.region, item.building, item.room].filter(Boolean).join(" · ") || "未完整房源")}</strong><small class="mono">ID ${escapeHtml(item.id.slice(0, 8))}${item.score !== undefined ? ` · 相似度 ${item.score}` : ""}</small></td>
         <td><strong>${escapeHtml(item.area || "面积待补充")}</strong><small>${escapeHtml(item.partition || "格局待补充")}</small></td>
         <td>${escapeHtml(item.rent || "—")}<small>口径需确认</small></td>
-        <td>${escapeHtml(item.source_sheet)}<small>第 ${item.source_row} 行</small></td>
+        <td>${escapeHtml(item.source_sheet || "—")}<small>${item.source_row ? `第 ${item.source_row} 行` : "前端新增"}</small></td>
         <td>${item.is_new_marked ? '<span class="mark new">新增</span>' : ""}${item.is_special_marked ? '<span class="mark special">特别</span>' : ""}${!item.is_new_marked && !item.is_special_marked ? "—" : ""}</td>
         <td><div class="cell-actions">${statusPill(item.status)}${item.status === "needs_review" ? `<button class="text-button confirm-property" data-confirm-property="${item.id}">确认房源</button>` : ""}</div></td>
       </tr>`).join("")
-    : `<tr><td colspan="6"><div class="empty"><strong>${escapeHtml(emptyTitle)}</strong>调整搜索条件，或导入房源 Excel。</div></td></tr>`;
+    : `<tr><td colspan="6"><div class="empty"><strong>${escapeHtml(emptyTitle)}</strong>调整搜索条件，或点右上角「新增房源」补一条、用「导入 Excel」批量进。</div></td></tr>`;
   fillPropertyOptions();
+}
+
+// 手工新增：Excel 里没有的房，不必为一个房源回去改表再整本重导。
+// 覆盖走「409 → 用户再点一次」：撞了同房号先告诉你那是哪一套，
+// 再由你决定是覆盖它还是改房号，绝不静默覆盖。
+let propertyOverwriteId = "";
+
+function openPropertyDialog() {
+  const form = $("#property-form");
+  form.reset();
+  propertyOverwriteId = "";
+  const box = $("#property-conflict");
+  box.innerHTML = "";
+  box.classList.add("hidden");
+  $("#property-submit").textContent = "保存房源";
+  openDialog("property-dialog");
+  setTimeout(() => form.elements.region?.focus(), 60);
+}
+
+function showPropertyConflict(existing) {
+  propertyOverwriteId = existing.id;
+  const box = $("#property-conflict");
+  box.innerHTML = `<strong>这套房已经在库里：</strong>${escapeHtml(existing.label)}`
+    + `（面积 ${escapeHtml(existing.area || "—")}，租金 ${escapeHtml(existing.rent || "—")}，来源 ${escapeHtml(existing.source || "—")}）。<br>`
+    + "再点一次「覆盖更新」就用这次填的内容替换它，空着的项保持原值。";
+  box.classList.remove("hidden");
+  $("#property-submit").textContent = "覆盖更新";
 }
 
 async function loadProperties() {
@@ -870,7 +905,7 @@ async function openNewTask() {
   const data = await api("/api/properties?limit=1000");
   state.propertyOptions = data.items;
   if (!state.propertyOptions.length) {
-    toast("请先导入房源，再创建视频任务", true);
+    toast("请先导入房源 Excel，或在房源库点「新增房源」补一条", true);
     openDialog("import-dialog");
     return;
   }
@@ -1308,6 +1343,42 @@ function runPalette(index = state.palette.index) {
 }
 
 /* ------------------------------------------------------------------ 事件绑定 */
+
+// ---------------------------------------------------------------- 手工新增房源
+
+$("#property-new").addEventListener("click", openPropertyDialog);
+
+$("#property-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submit = $("#property-submit");
+  const values = Object.fromEntries(new FormData(form).entries());
+  if (propertyOverwriteId) values.overwrite_id = propertyOverwriteId;
+  submit.disabled = true;
+  submit.textContent = propertyOverwriteId ? "覆盖中…" : "保存中…";
+  try {
+    const result = await api("/api/properties", { method: "POST", body: JSON.stringify(values) });
+    const property = result.property || {};
+    const label = [property.region, property.building, property.room].filter(Boolean).join(" · ") || property.room;
+    closeDialog("property-dialog");
+    await Promise.all([loadProperties(), loadDashboard()]);
+    if (property.status === "needs_review") {
+      toast(`已存「${label}」，区域或楼栋没填全，先标成待确认`);
+    } else {
+      toast(result.created ? `已新增房源：${label}` : `已更新房源：${label}`);
+    }
+  } catch (error) {
+    // 409 = 同房号已存在。把「那是哪一套」原样摆出来，再点一次就是覆盖。
+    if (error.status === 409 && error.detail && error.detail.existing) {
+      showPropertyConflict(error.detail.existing);
+    } else {
+      toast(error.message, true);
+    }
+  } finally {
+    submit.disabled = false;
+    submit.textContent = propertyOverwriteId ? "覆盖更新" : "保存房源";
+  }
+});
 
 $("#import-form").addEventListener("submit", async (event) => {
   event.preventDefault();
