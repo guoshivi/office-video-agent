@@ -37,6 +37,64 @@ logger = logging.getLogger(__name__)
 
 CACHE_DIR = BASE_DIR / "data" / "cache" / "tts"
 
+
+# ------------------------------------------------------------------ 号码读法
+#
+# 稿子里的「903」是写给人看的，念出来该是「九零三」——交给引擎会念成
+# 「九百零三」，「D19」还会掉进英文念「D nineteen」。房号念错，观众找不到房，
+# 而这两处每套房子、每条片子都会出现。
+#
+# 反过来，面积、价格、工位数**不能**逐位念：「800平」念成「八零零平」是笑话。
+# 所以只在确认是房号时才动，剩下的一概交给引擎——它能念对。
+
+_CN_DIGIT = "零一二三四五六七八九"
+
+# 数字后面跟这些，说明是数量/面积/价格，按数值念
+_NUMERIC_AFTER = ("平", "㎡", "m²", "元", "块", "个", "人", "层", "米", "天", "号", "间", "位", "%")
+# 数字前面是这些，说明是金额，按数值念（「一个月2600」不能念「二六零零」）
+_NUMERIC_BEFORE = ("月租", "租金", "一个月", "每天", "一天", "押金", "总价", "单价", "约", "共")
+
+_NUMBER_RE = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)(?:-(\d+))?(?![\d.])")
+
+
+def _spoken_digits(run: str) -> str:
+    """903 → 九零三。房号永远逐位念，不管几位数。"""
+    return "".join(_CN_DIGIT[int(ch)] for ch in run)
+
+
+def speakable(text: str) -> str:
+    """把写给人看的号码，改成人念得出来的样子。
+
+    只改两处：
+    - 房号（3~4 位纯数字，前后没有单位）：903 → 九零三，202-2 → 二零二之二
+    - 楼栋（字母 + 数字）：D19 → D一九，A01 → A零一
+
+    改完的文本只用于**合成**，字幕照旧显示阿拉伯数字——字幕里写「九零三」
+    反而看不懂。
+    """
+    raw = str(text or "")
+    if not raw:
+        return raw
+
+    def replace(match: re.Match[str]) -> str:
+        run, sub = match.group(1), match.group(2)
+        if "." in run:                      # 2.6 元/㎡ 这类小数，永远是数值
+            return match.group(0)
+        after = raw[match.end(): match.end() + 2]
+        before = raw[max(0, match.start() - 6): match.start()]
+        if after.startswith(_NUMERIC_AFTER) or after.startswith(("/", "／")):
+            return match.group(0)
+        if any(before.endswith(word) for word in _NUMERIC_BEFORE):
+            return match.group(0)
+        # 字母打头的编号一律逐位：D19 / A01 / B2 都是门牌，念成"十九"没人听得懂
+        if re.search(r"[A-Za-z]\s*$", before):
+            return _spoken_digits(run) + (f"之{_spoken_digits(sub)}" if sub else "")
+        if len(run) < 3:                    # 一两位的裸数字多半是"2隔""5号线"，别碰
+            return match.group(0)
+        return _spoken_digits(run) + (f"之{_spoken_digits(sub)}" if sub else "")
+
+    return _NUMBER_RE.sub(replace, raw)
+
 # 火山的两套鉴权：新版控制台给 API Key（X-Api-Key），老版给 appid + access token。
 # 两种都支持，用户拿到哪种填哪种，不用去理解区别。
 DEFAULT_ENDPOINT = "https://openspeech.bytedance.com/api/v1/tts"
@@ -246,6 +304,8 @@ def synthesize(
     text = str(text or "").strip()
     if not text:
         raise TTSError("空文本没有可合成的内容")
+    # 房号要逐位念。字幕仍用原文，只有送进引擎的这一份被改写
+    spoken = speakable(text)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -261,7 +321,7 @@ def synthesize(
     edge_voice = edge_voice or EDGE_VOICES.get(voice_key, EDGE_VOICES["female_warm"])
     speak_voice = voice if chosen == "volcano" else edge_voice
 
-    key = _cache_key(text, chosen, speak_voice, rate, conf["emotion"] if chosen == "volcano" else "")
+    key = _cache_key(spoken, chosen, speak_voice, rate, conf["emotion"] if chosen == "volcano" else "")
     cached = _read_cache(key)
     if cached:
         shutil.copyfile(cached["path"], out_path)
@@ -270,22 +330,22 @@ def synthesize(
 
     try:
         if chosen == "volcano":
-            _synth_volcano(text, out_path, speak_voice, rate, conf)
+            _synth_volcano(spoken, out_path, speak_voice, rate, conf)
         else:
-            _synth_edge(text, out_path, speak_voice, rate)
+            _synth_edge(spoken, out_path, speak_voice, rate)
     except Exception as error:  # noqa: BLE001 - 火山挂了要能出片，观感差一点比出不来强
         if (provider or conf["provider"]) != "auto" or chosen == "edge":
             raise
         logger.warning("豆包语音失败，这一句退回 edge-tts：%s", str(error)[:200])
         chosen = "edge"
         speak_voice = edge_voice
-        key = _cache_key(text, chosen, speak_voice, rate, "")
+        key = _cache_key(spoken, chosen, speak_voice, rate, "")
         cached = _read_cache(key)
         if cached:
             shutil.copyfile(cached["path"], out_path)
             return {"path": out_path, "provider": "edge", "cached": True,
                     "duration": float(cached.get("duration") or 0.0), "words": []}
-        _synth_edge(text, out_path, speak_voice, rate)
+        _synth_edge(spoken, out_path, speak_voice, rate)
 
     if not out_path.is_file() or out_path.stat().st_size == 0:
         raise TTSError(f"配音文件是空的：{text[:20]}")
