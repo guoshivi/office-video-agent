@@ -133,3 +133,27 @@ def test_hook_card_never_outlives_three_seconds():
     ass = build_ass(sentences, (1080, 1920), "Noto Sans SC", hook_card={"title": "800平"})
     card = [ln for ln in ass.splitlines() if ",Card," in ln][0]
     assert card.split(",")[2] == "0:00:03.20"
+
+
+def _cap_style_fields(ass):
+    """把 Cap 样式行拆成字段字典，方便断言描边配置。"""
+    line = next(ln for ln in ass.splitlines() if ln.startswith("Style: Cap,"))
+    names = ("Name", "Fontname", "Fontsize", "PrimaryColour", "SecondaryColour",
+             "OutlineColour", "BackColour", "Bold", "Italic", "Underline", "StrikeOut",
+             "ScaleX", "ScaleY", "Spacing", "Angle", "BorderStyle", "Outline",
+             "Shadow", "Alignment", "MarginL", "MarginR", "MarginV", "Encoding")
+    return dict(zip(names, line[len("Style: "):].split(",")))
+
+
+def test_caption_has_no_black_border_when_box_on():
+    """底条在时字幕是干净白字：黑描边和阴影都清零（用户嫌那个黑框脏）。"""
+    fields = _cap_style_fields(_build(box=True))
+    assert fields["Outline"] == "0"
+    assert fields["Shadow"] == "0"
+
+
+def test_caption_border_returns_when_box_off():
+    """底条关掉时描边必须回来：亮素材上无描边的白字会看不清。"""
+    fields = _cap_style_fields(_build(box=False))
+    assert int(fields["Outline"]) >= 3
+    assert int(fields["Shadow"]) >= 1

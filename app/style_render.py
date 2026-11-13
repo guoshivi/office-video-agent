@@ -624,7 +624,10 @@ def build_ass(
     side = int(round(70 * scale))
     per_char = size * 0.694          # 实测：单字宽 ≈ 字号 × 0.694
     max_chars = max(5, int((width - 2 * side) / per_char))
-    border = max(3, int(round(CAPTION_BORDER * scale)))
+    # 字幕黑描边：底条在时白字坐在深色条上，厚描边+阴影就是用户看到的「黑框」，
+    # 清零变干净字；底条关掉时描边回来——亮素材上无描边的白字会看不清。
+    border = 0 if box else max(3, int(round(CAPTION_BORDER * scale)))
+    shadow = 0 if box else 3
     label_size = int(round(LABEL_SIZE * scale))
     card_size = int(round(CAPTION_SIZE * 1.3 * scale))
     card_sub_size = int(round(card_size * 0.55))
@@ -638,7 +641,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Cap,{font_name},{size},&H00FFFFFF,&H000000FF,&H00000000,&H78000000,-1,0,0,0,100,100,1,0,1,{border},3,2,{side},{side},{margin_v},1
+Style: Cap,{font_name},{size},&H00FFFFFF,&H000000FF,&H00000000,&H78000000,-1,0,0,0,100,100,1,0,1,{border},{shadow},2,{side},{side},{margin_v},1
 Style: Label,{font_name},{label_size},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,1,0,1,5,4,7,{LABEL_X},{LABEL_X},{LABEL_Y},1
 Style: Card,{font_name},{card_size},&H00FFFFFF,&H000000FF,&H00000000,&H50000000,-1,0,0,0,100,100,1,0,1,{card_border},6,5,0,0,0,1
 
