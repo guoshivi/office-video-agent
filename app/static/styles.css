@@ -2089,7 +2089,16 @@ kbd {
   overflow: hidden;
   background: var(--bg-soft);
 }
-.template-grid-wrap img { width: 100%; display: block; }
+.template-grid-wrap img {
+  display: block;
+  /* 拼图是按 240px 一格抽出来拼的，本身就不宽。拉满容器宽度后，
+     竖屏素材两行能顶满整屏，改角色的下拉要往下滚一屏半才看得见。
+     按原尺寸显示，再给个高度上限，宽屏也不会被放大到糊。 */
+  width: auto;
+  max-width: 100%;
+  max-height: 62vh;
+  margin: 0 auto;
+}
 
 .template-columns {
   display: grid;

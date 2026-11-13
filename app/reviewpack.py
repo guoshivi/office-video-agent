@@ -26,6 +26,22 @@ CELL_WIDTH = 240
 COLUMNS = 4
 MAX_CELLS = 12
 
+
+def _grid_columns(count: int) -> int:
+    """按镜头数定列数，别让最后一行空出半张白纸。
+
+    5 个镜头铺 4 列会变成「4 格 + 1 格 + 3 块白」，图片凭空高出一截，
+    详情页要往下滚一屏才能看到改角色的下拉。宁可窄一点，也要把格子铺满。
+    """
+    if count <= 3:
+        return max(count, 1)
+    if count == 4:
+        return 2
+    if count <= 6:
+        return 3
+    return COLUMNS
+
+
 REVIEW_FIELDS = (
     "subject",   # 这一镜拍的是什么：门头 / 开放工位 / 老板间 / 会议室 / 走廊 / 窗外
     "line",      # 这一镜的台词（照抄画面字幕，没有就留空）
@@ -118,12 +134,13 @@ def build_grid(path: Path, spans: list[tuple[float, float]], out: Path) -> Path:
         raise ReviewPackError("抽帧失败，视频可能损坏")
 
     width, height = cells[0][0].size
-    rows = (len(cells) + COLUMNS - 1) // COLUMNS
-    canvas = Image.new("RGB", (COLUMNS * width, rows * (height + 26)), "white")
+    columns = _grid_columns(len(cells))
+    rows = (len(cells) + columns - 1) // columns
+    canvas = Image.new("RGB", (columns * width, rows * (height + 26)), "white")
     draw = ImageDraw.Draw(canvas)
     for position, (image, index, seconds) in enumerate(cells):
-        x = (position % COLUMNS) * width
-        y = (position // COLUMNS) * (height + 26)
+        x = (position % columns) * width
+        y = (position // columns) * (height + 26)
         canvas.paste(image, (x, y))
         caption = f"#{index} {seconds:.1f}s"
         # 白底黑字压在格子上方，避免深色画面里看不见

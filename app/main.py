@@ -1048,13 +1048,19 @@ def suggest_templates(task_id: str = Query(min_length=1), limit: int = Query(def
 
 @app.get("/api/templates")
 def list_templates(limit: int = Query(default=30, ge=1, le=200)):
-    from .style_template import TEMPLATE_DIR, is_configured
+    from .style_template import TEMPLATE_DIR, _engine, is_configured
 
     with transaction() as connection:
         rows = connection.execute(
             "SELECT * FROM style_templates ORDER BY created_at DESC LIMIT ?", (limit,)
         ).fetchall()
-    return {"items": [serialize_template(row) for row in rows], "configured": is_configured()}
+    return {
+        "items": [serialize_template(row) for row in rows],
+        # configured 指云端增强（换文案、写句子）；拆解走本地引擎，永远可用
+        "configured": is_configured(),
+        "engine": _engine(),
+    }
+
 
 
 @app.get("/api/templates/{template_id}")

@@ -193,8 +193,38 @@ def _spec_summary(spec: dict) -> str:
     return " / ".join(str(shot.get("role") or "") for shot in shots[:8])
 
 
+def _engine() -> str:
+    """拆解引擎。
+
+    默认 local：ffmpeg 找切点 + OCR 读字幕，离线、免费、零依赖。
+    方舟视频理解留成可选增强（STYLE_ENGINE=ark 且有 key），因为它要先把整条片子
+    传上去做预处理，又慢又贵，而且它自己判镜头，和拼图复核用的那套时间轴对不上。
+    """
+    return (os.getenv("STYLE_ENGINE", "").strip() or "local").lower()
+
+
+def _analyze_local(path: Path) -> dict:
+    """本地拆：切点 / 字幕 / 等分占位，跟拼图复核用的是同一份 spec。"""
+    from .refvideo import RefVideoError, analyze_file
+
+    try:
+        return analyze_file(path)
+    except RefVideoError as error:
+        raise StyleTemplateError(str(error)) from error
+
+
+def _transcript_of(spec: dict) -> str:
+    return "\n".join(
+        str(item.get("text") or "") for item in (spec.get("sentences") or []) if item.get("text")
+    )
+
+
 def analyze(template_id: str) -> dict:
-    """后台线程里跑：上传 → 拆解 → 落库。"""
+    """后台线程里跑：拆解 → 落库。
+
+    拆解是本地能力，不该被云端 key 挡住：没有 ARK_API_KEY 也必须能拆出一条片子，
+    否则「上传 → 看拼图 → 复核」这条主链路在最常见的环境里第一步就断了。
+    """
     with transaction() as connection:
         row = connection.execute("SELECT * FROM style_templates WHERE id=?", (template_id,)).fetchone()
     if row is None:
@@ -206,6 +236,18 @@ def analyze(template_id: str) -> dict:
             raise StyleTemplateError("参考视频文件已丢失，请重新上传")
 
         duration = probe_duration(path)
+        if _engine() == "local":
+            spec = _analyze_local(path)
+            transcript = _transcript_of(spec)
+            with transaction() as connection:
+                connection.execute(
+                    """UPDATE style_templates SET status='ready', spec_json=?, transcript=?,
+                       duration_s=?, error='', updated_at=? WHERE id=?""",
+                    (json_dumps(spec), transcript, spec.get("duration") or duration, utc_now(), template_id),
+                )
+            logger.info("风格模板拆解完成（本地）：%s（%s）", template_id, _spec_summary(spec))
+            return spec
+
         file_id = upload_video(path)
         wait_for_file(file_id)
 
@@ -282,6 +324,21 @@ def _facts_for(task_row) -> str:
 
 # 卖点镜轮着讲什么。一条片子连着四个"亮点"镜时，不能四句都说采光。
 _SPOT_ROTATION = ("zone", "furn", "boss", "light")
+# 换卖点只能换成画面里真有的东西。没有这张表，程序会因为"furn 说过了"就去讲
+# "独立老板间"——可这一镜拍的是靠窗工位，客户一句"老板间在哪"就把人问住了。
+_TOPIC_HINTS: dict[str, tuple[str, ...]] = {
+    "zone": ("走廊", "分区", "动线", "隔断", "过道", "入口", "通道", "工区"),
+    "furn": ("工位", "家具", "桌", "椅", "沙发", "柜", "茶几", "茶桌", "办公"),
+    "boss": ("老板间", "独立间", "单间", "隔间", "经理室", "会议室", "独立办公"),
+    "light": ("窗", "采光", "阳光", "光线", "通透", "朝南", "朝东"),
+}
+
+
+def _hits(subject: str, topic: str) -> bool:
+    """这一镜的画面上，到底有没有某个卖点。"""
+    text = str(subject or "")
+    return bool(text) and any(word in text for word in _TOPIC_HINTS.get(topic, ()))
+
 _ROLE_TO_TOPIC = {
     "hook": "hook",
     "area": "area", "面积": "area",
@@ -324,11 +381,16 @@ def _compact_spec(spec: dict) -> dict:
     shots = []
     for item in scenes:
         role = str(item.get("role") or "")
+        subject = str(item.get("subject") or "")
         topic = _ROLE_TO_TOPIC.get(role)
-        # 同一个卖点第二次出现就该换：连着三句"采光通透""整面落地窗""白天不用开灯"
-        # 听着像卡带，而且白占了镜位。只有卖点类需要换，钩子/收尾本来就各一句。
-        if topic in used and topic in spots:
-            topic = None
+        # 同一个卖点第二次出现时想换个说法：连着三句"采光通透""整面落地窗""白天不用开灯"
+        # 听着像卡带。但换的前提是画面里真有别的卖点——
+        # 只换成 subject 里写得出来的，一个都对不上就照原卖点再说一遍，由句库换句子。
+        # 宁可同一个卖点说两次，也不能凭空造一个画面上没有的空间。
+        if topic in used and topic in spots and not _hits(subject, topic):
+            spare = [t for t in _SPOT_ROTATION if t not in used and _hits(subject, t)]
+            if spare:
+                topic = spare[0]
         if topic is None:
             for offset in range(len(_SPOT_ROTATION)):
                 candidate = _SPOT_ROTATION[(cursor + offset) % len(_SPOT_ROTATION)]

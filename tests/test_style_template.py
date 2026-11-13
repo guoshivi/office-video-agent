@@ -96,6 +96,8 @@ def test_template_analyze_and_apply(monkeypatch):
     base = f"http://127.0.0.1:{server.server_port}"
     monkeypatch.setenv("ARK_BASE_URL", base)
     monkeypatch.setenv("ARK_API_KEY", "test-key")
+    # 这条测的是云端视频理解那条路；默认引擎是本地，这里显式切过去
+    monkeypatch.setenv("STYLE_ENGINE", "ark")
     monkeypatch.setattr(style_template, "probe_duration", lambda _path: 30.0)
 
     def fake_analyze(_path, task_no, **_kwargs):
@@ -183,3 +185,57 @@ def test_not_configured_raises():
     from app import style_template
 
     assert style_template.is_configured() is False or True  # 取决于环境，仅保证不抛异常
+
+
+def test_template_analyzes_without_cloud_key(monkeypatch):
+    """拆解是本地能力：没配 ARK_API_KEY 也必须能把一条片子拆出来。
+
+    回归用：analyze() 原本整条走方舟视频理解（上传 → 预处理 → 视频问答），
+    没 key 时直接 failed，而这是最常见的使用环境——"上传 → 看拼图 → 复核"
+    的主链路第一步就断了，后面拼图、占比、套用全都没机会发生。
+    """
+    from app import refvideo, style_template
+    from app.db import init_db, transaction, utc_now
+
+    init_db()
+    monkeypatch.delenv("ARK_API_KEY", raising=False)
+    monkeypatch.delenv("STYLE_ENGINE", raising=False)
+
+    def fake_local(_path):
+        return {
+            "duration": 12.5,
+            "cuts": [],
+            "shots": [
+                {"index": 1, "role": "hook", "start": 0.0, "end": 12.5,
+                 "seconds": 12.5, "sample": "", "words": 0, "synthetic": True}
+            ],
+            "sentences": [{"start": 1.0, "end": 2.0, "text": "这里是一句台词"}],
+            "labels": [],
+            "warnings": [],
+            "engine": "local",
+        }
+
+    monkeypatch.setattr(refvideo, "analyze_file", fake_local)
+    monkeypatch.setattr(style_template, "probe_duration", lambda _path: 12.5)
+
+    template_id = uuid.uuid4().hex[:12]
+    source = style_template.TEMPLATE_DIR / template_id / "source.mp4"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(b"fake-reference-video")
+    now = utc_now()
+    with transaction() as connection:
+        connection.execute(
+            """INSERT INTO style_templates(id, name, source_type, source_path, status, created_at, updated_at)
+               VALUES (?, '无 key 参考片', 'upload', ?, 'pending', ?, ?)""",
+            (template_id, str(source), now, now),
+        )
+
+    spec = style_template.analyze(template_id)
+    assert len(spec["shots"]) == 1
+
+    with transaction() as connection:
+        row = connection.execute("SELECT * FROM style_templates WHERE id=?", (template_id,)).fetchone()
+    assert row["status"] == "ready"
+    assert row["error"] == ""
+    assert "这里是一句台词" in row["transcript"]
+

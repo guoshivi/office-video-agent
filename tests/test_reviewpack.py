@@ -280,18 +280,42 @@ def test_compact_spec_keeps_explicit_spot_role():
     assert topics == ["area", "zone", "light", "furn", "cta"]
 
 
-def test_compact_spec_never_repeats_spot_topic():
-    """同一卖点第二次出现必须换，否则"采光通透""整面落地窗""白天不用开灯"连念三遍。
+def test_compact_spec_keeps_topic_when_nothing_else_in_frame():
+    """同一卖点第二次出现，画面里又没别的卖点：宁可重复主题，也不许编一个空间。
 
-    回归用：以前 _ROLE_TO_TOPIC.get(role, "light") 的默认值是 light，
-    认不出的角色全被写成采光，一条片子四句里三句讲采光。
+    回归用：这条最先是用"是否重复"当判据的，结果模板里两镜都是家具时，
+    第二句被改写成"独立老板间，谈单不吵"——可那一镜拍的是靠窗工位，
+    客户一句"老板间在哪"就把中介问住了。编错比重复严重得多。
     """
     from app.style_template import _compact_spec
 
-    spec = {"scenes": [{"scene": 1, "role": "采光"} for _ in range(3)], "shots": []}
+    spec = {
+        "scenes": [
+            {"scene": 1, "role": "furn", "subject": "工位近景，桌面有打印机和文件"},
+            {"scene": 2, "role": "furn", "subject": "工位近景，桌面有打印机和文件"},
+        ],
+        "shots": [],
+    }
     topics = [shot["role"] for shot in _compact_spec(spec)["shots"]]
-    assert topics[0] == "light"
-    assert len(set(topics[:-1])) == len(topics) - 1  # 除补的 cta 外不重复
+    assert topics[:2] == ["furn", "furn"]
+    assert "boss" not in topics
+
+
+def test_compact_spec_switches_to_topic_visible_in_frame():
+    """role 和画面矛盾时，以画面为准：只换成 subject 里写得出来的卖点。"""
+    from app.style_template import _compact_spec
+
+    spec = {
+        "scenes": [
+            {"scene": 1, "role": "furn", "subject": "工位近景，桌上有文件"},
+            # 骨架猜成家具，人复核时写的是落地窗
+            {"scene": 2, "role": "furn", "subject": "整面落地窗，下午三点阳光很足"},
+        ],
+        "shots": [],
+    }
+    topics = [shot["role"] for shot in _compact_spec(spec)["shots"]]
+    assert topics[0] == "furn"
+    assert topics[1] == "light"
 
 
 def test_compact_spec_adds_cta_when_missing():
@@ -517,3 +541,20 @@ def test_reapply_scenes_writes_role_back_to_shots():
     reapply_scenes(spec)
     assert spec["shots"][0]["role"] == "light"
     assert spec["shots"][0]["subject"] == "带窗独立间"
+
+
+def test_grid_columns_fill_last_row():
+    """列数要跟着镜头数走：5 镜铺 4 列会剩 3 块白，图片凭空高一截。
+
+    回归用：一镜到底按时间等分出 5 段时，详情页一屏全是拼图，
+    改角色的下拉要往下滚一屏半才看得见。
+    """
+    from app.reviewpack import _grid_columns
+
+    assert _grid_columns(1) == 1
+    assert _grid_columns(3) == 3
+    assert _grid_columns(4) == 2      # 2×2 比一行四格看得清
+    assert _grid_columns(5) == 3      # 3+2，只剩一格空
+    assert _grid_columns(6) == 3
+    assert _grid_columns(8) == 4
+    assert _grid_columns(12) == 4
