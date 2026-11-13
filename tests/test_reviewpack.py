@@ -258,7 +258,60 @@ def test_compact_spec_rotates_spot_topics():
 
     spec = {"scenes": [{"scene": 1, "role": "亮点"} for _ in range(4)], "shots": []}
     topics = [shot["role"] for shot in _compact_spec(spec)["shots"]]
-    assert topics == ["zone", "furn", "boss", "light"]
+    assert topics[:4] == ["zone", "furn", "boss", "light"]
+    # 没有收尾镜的模板会自动补一镜 cta，见下面的用例
+    assert topics[-1] == "cta"
+
+
+def test_compact_spec_keeps_explicit_spot_role():
+    """复核时人填了"这镜是采光"，别用轮换把他覆盖成工区。"""
+    from app.style_template import _compact_spec
+
+    spec = {
+        "scenes": [
+            {"scene": 1, "role": "area"},
+            {"scene": 2, "role": "zone"},
+            {"scene": 3, "role": "light"},
+            {"scene": 4, "role": "furn"},
+        ],
+        "shots": [],
+    }
+    topics = [shot["role"] for shot in _compact_spec(spec)["shots"]]
+    assert topics == ["area", "zone", "light", "furn", "cta"]
+
+
+def test_compact_spec_never_repeats_spot_topic():
+    """同一卖点第二次出现必须换，否则"采光通透""整面落地窗""白天不用开灯"连念三遍。
+
+    回归用：以前 _ROLE_TO_TOPIC.get(role, "light") 的默认值是 light，
+    认不出的角色全被写成采光，一条片子四句里三句讲采光。
+    """
+    from app.style_template import _compact_spec
+
+    spec = {"scenes": [{"scene": 1, "role": "采光"} for _ in range(3)], "shots": []}
+    topics = [shot["role"] for shot in _compact_spec(spec)["shots"]]
+    assert topics[0] == "light"
+    assert len(set(topics[:-1])) == len(topics) - 1  # 除补的 cta 外不重复
+
+
+def test_compact_spec_adds_cta_when_missing():
+    """空房实拍素材没有收尾镜，套用时要补一镜，不能把 cta 塞进最后一镜。"""
+    from app.style_template import _compact_spec
+
+    spec = {"scenes": [{"scene": 1, "role": "area"}, {"scene": 2, "role": "furn"}], "shots": []}
+    shots = _compact_spec(spec)["shots"]
+    assert [shot["role"] for shot in shots] == ["area", "furn", "cta"]
+    assert shots[-1].get("added") is True
+
+
+def test_compact_spec_keeps_existing_cta():
+    """模板自带收尾镜时不许再补一个。"""
+    from app.style_template import _compact_spec
+
+    spec = {"scenes": [{"scene": 1, "role": "area"}, {"scene": 2, "role": "cta"}], "shots": []}
+    shots = _compact_spec(spec)["shots"]
+    assert [shot["role"] for shot in shots] == ["area", "cta"]
+    assert not shots[-1].get("added")
 
 
 def test_compact_spec_without_scenes_falls_back_to_roles():
@@ -273,3 +326,67 @@ def test_compact_spec_without_scenes_falls_back_to_roles():
     }
     compact = _compact_spec(spec)
     assert [shot["role"] for shot in compact["shots"]] == ["hook", "cta"]
+
+
+# ------------------------------------------------------------------ 一镜到底
+
+def test_one_shot_film_splits_by_time():
+    """一镜到底（切点 0 个）的实拍走位片，整片变 1 个镜头等于没拆。
+
+    实测一条 10.57 秒空房带看片：切点 0 个。修前拆出「1 个镜头 10.6 秒」，
+    对拍摄指导毫无用处。改成按时间等分给占位段落，并标 synthetic。
+    """
+    from app.refvideo import _shots_from_cuts
+
+    shots = _shots_from_cuts(10.6, [])
+    assert len(shots) >= 2
+    assert all(shot.get("synthetic") for shot in shots)
+    assert all(shot["seconds"] > 0 for shot in shots)
+    assert abs(sum(shot["seconds"] for shot in shots) - 10.6) <= 0.2
+
+
+def test_short_clip_not_split():
+    """3 秒的片子等分成了碎渣没用，保持整段。"""
+    from app.refvideo import _shots_from_cuts
+
+    shots = _shots_from_cuts(3.0, [])
+    assert len(shots) == 1
+    assert not shots[0].get("synthetic")
+
+
+def test_cut_film_not_split_by_time():
+    """有切点的片子不许等分，等分会把真镜头边界冲掉。"""
+    from app.refvideo import _shots_from_cuts
+
+    shots = _shots_from_cuts(30.0, [5.0, 12.0, 20.0])
+    assert len(shots) == 4
+    assert not any(shot.get("synthetic") for shot in shots)
+
+
+def test_spec_spans_uses_synthetic_shots():
+    """拼图要按等分段落抽帧，否则一镜到底的片子只切出 1 格。"""
+    from app.reviewpack import spec_spans
+
+    spec = {
+        "duration": 10.6,
+        "cuts": [],
+        "shots": [
+            {"index": 1, "start": 0.0, "end": 2.6, "synthetic": True},
+            {"index": 2, "start": 2.6, "end": 5.3, "synthetic": True},
+        ],
+    }
+    spans = spec_spans(spec)
+    assert spans == [(0.0, 2.6), (2.6, 5.3)]
+
+
+def test_spec_spans_ignores_lines_as_spans():
+    """有台词的片子 shots 是句子级（17 句 / 8 镜），不能拿来当镜头边界。"""
+    from app.reviewpack import spec_spans
+
+    spec = {
+        "duration": 25.0,
+        "cuts": [8.0, 16.0],
+        "shots": [{"index": i, "start": i * 1.5, "end": i * 1.5 + 1.4} for i in range(1, 18)],
+    }
+    spans = spec_spans(spec)
+    assert len(spans) == 3

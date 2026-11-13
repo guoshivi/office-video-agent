@@ -1944,6 +1944,9 @@ const TEXT_SOURCE_LABEL = {
 const ROLE_LABEL = {
   hook: "开头", area: "面积", zone: "空间", furn: "家具",
   boss: "老板间", value: "价格", cta: "收尾", 亮点: "卖点", 面积: "面积",
+  // 复核时可以直接填中文角色名，这里兜住英文那套
+  light: "采光", 采光: "采光", 分区: "空间", 工区: "空间", 老板间: "老板间",
+  spot: "卖点", 价格: "价格", 收尾: "收尾", 开头: "开头", 家具: "家具",
 };
 
 async function loadLibrary() {

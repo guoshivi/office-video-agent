@@ -67,6 +67,25 @@ def scene_spans(duration: float, cuts: list[float]) -> list[tuple[float, float]]
     return spans or [(0.0, duration)]
 
 
+def spec_spans(spec: dict) -> list[tuple[float, float]]:
+    """取镜头区间。
+
+    一镜到底的片子没有切点，refvideo 会按时间等分出占位段落（标 synthetic），
+    这时必须用那些段落抽帧，否则整条片子只切出 1 格，拼图等于没有。
+    有台词的片子 shots 是句子级的（17 句 / 8 镜），不能用，还得回到切点。
+    """
+    shots = spec.get("shots") or []
+    if shots and any(shot.get("synthetic") for shot in shots):
+        spans = [
+            (float(shot["start"]), float(shot["end"]))
+            for shot in shots
+            if float(shot.get("end") or 0) > float(shot.get("start") or 0)
+        ]
+        if spans:
+            return spans
+    return scene_spans(float(spec.get("duration") or 0), spec.get("cuts") or [])
+
+
 def build_grid(path: Path, spans: list[tuple[float, float]], out: Path) -> Path:
     """按镜头区间中点抽一帧，拼成带序号和时长的对照图。
 
@@ -134,7 +153,7 @@ def build_checklist(
 
     subject 一律留空——本地没有任何能力判断"这镜拍的是什么"，猜不如空着。
     """
-    spans = spans or scene_spans(float(spec.get("duration") or 0), spec.get("cuts") or [])
+    spans = spans or spec_spans(spec)
 
     shots = []
     for shot in spec.get("shots") or []:
@@ -208,7 +227,7 @@ def build_pack(template_id: str, *, force: bool = False) -> dict:
 
     directory.mkdir(parents=True, exist_ok=True)
     duration = float(spec.get("duration") or probe_duration(source))
-    spans = scene_spans(duration, spec.get("cuts") or [])
+    spans = spec_spans(spec)
     # 给每句标上属于第几镜：复核按镜头给语义，回填时得知道下发给谁
     for shot in spec.get("shots") or []:
         shot["scene"] = _scene_of(float(shot.get("start") or 0), spans)
@@ -316,7 +335,7 @@ def apply_review(
     duration = spec.get("duration") or row["duration_s"] or 0
     # 结构占比按**镜头时长**算，不按台词时长：结构讲的是"钩子占了开头几秒"，
     # 台词只在有人说话时才有时间，拿它当分母会算出一条片子只有一半时长
-    spans = scene_spans(float(duration or 0), spec.get("cuts") or [])
+    spans = spec_spans(spec)
     role_of_scene: dict[int, str] = {
         int(item["scene"]): item["role"] for item in spec.get("scenes") or [] if item.get("role")
     }

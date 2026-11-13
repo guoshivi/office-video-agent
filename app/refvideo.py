@@ -233,13 +233,29 @@ def _shots_from_cuts(duration: float, cuts: list[float]) -> list[dict]:
 
     这不是退而求其次的猜测：镜头数是这条片子最硬的节奏信息，
     几秒一换镜、开场留多久，都能直接拿去指导拍摄。
+
+    一镜到底的片子（实拍走位带看最常见）没有切点，整片会变成一个镜头，
+    拆出来对拍摄毫无用处。这种情况按时间等分出「段落格子」——注意是等分，
+    不是猜边界：一镜里的空间段落只能靠看画面判断，脚本猜不准。
+    实测过用直方图帧差找边界，一条 10 秒走位片切出 21 个峰，
+    全落在镜头扫过窗户的瞬间（帧差天然大），全是假切点。
     """
     edges = [0.0] + [c for c in _merge_close(cuts) if 0.2 < c < duration - 0.2] + [duration]
     spans = [(a, b) for a, b in zip(edges, edges[1:]) if b - a > 0.3] or [(0.0, duration)]
+
+    synthetic = False
+    if len(spans) == 1 and duration >= 6:
+        count = max(2, min(int(round(duration / 2.5)), 8))
+        step = duration / count
+        spans = [(index * step, (index + 1) * step) for index in range(count)]
+        # 末段吸附到真实时长，否则逐段取整后总和对不上，结构占比会算出 100.9%
+        spans[-1] = (spans[-1][0], duration)
+        synthetic = True
+
     roles = skeleton_roles(len(spans))
     shots = []
     for index, (start, end) in enumerate(spans):
-        shots.append({
+        shot = {
             "index": index + 1,
             "role": roles[index],
             "start": round(start, 2),
@@ -247,7 +263,11 @@ def _shots_from_cuts(duration: float, cuts: list[float]) -> list[dict]:
             "seconds": round(end - start, 1),
             "sample": "",
             "words": 0,
-        })
+        }
+        if synthetic:
+            # 标出来：这段边界是等分的，不是真的换镜，复核时必须人工改
+            shot["synthetic"] = True
+        shots.append(shot)
     return shots
 
 
@@ -315,10 +335,14 @@ def build_spec(
 
     last = shots[-1]
     has_text = any(shot["words"] for shot in shots)
+    synthetic = any(shot.get("synthetic") for shot in shots)
 
     tips: list[str] = []
     if has_text:
         tips.append(f"全长 {duration:.0f} 秒，共 {len(shots)} 句，平均一句 {avg_shot} 秒")
+    elif synthetic:
+        tips.append(f"全长 {duration:.0f} 秒，一镜到底，按时间等分成 {len(shots)} 段")
+        tips.append("没有换镜切点，这 %d 段只是占位：真正走了几个空间、每段讲什么，要看拼图确认" % len(shots))
     else:
         tips.append(f"全长 {duration:.0f} 秒，共 {len(shots)} 个镜头，平均 {avg_shot} 秒一换")
     if cut_span:
@@ -335,7 +359,9 @@ def build_spec(
     if has_text and last["role"] == "cta":
         tips.append(f"收尾第 {last['index']} 句是明确的行动号召：" + last["sample"])
 
-    if not has_text:
+    if not has_text and synthetic:
+        summary = f"一镜到底、{duration:.0f} 秒，按时间等分出 {len(shots)} 段待复核"
+    elif not has_text:
         summary = f"{len(shots)} 个镜头、{duration:.0f} 秒，平均 {avg_shot} 秒一换，台词没读到"
     elif len(shots) <= 2 and cut_span:
         summary = f"卡点片：{len(cut_span) + 1} 个镜头、{duration:.0f} 秒，台词只有 {len(shots)} 句"
@@ -469,6 +495,11 @@ def analyze_file(path: Path) -> dict:
     spec["duration"] = round(duration, 1)
     spec["cuts"] = cuts
     spec["text_source"] = text_source
+    if any(shot.get("synthetic") for shot in spec.get("shots") or []):
+        warnings.append(
+            "这条片子没有任何换镜切点（一镜到底），镜头边界是按时间等分的占位，"
+            "必须打开拼图人工划分空间段落，否则结构占比是假的"
+        )
     spec["warnings"] = warnings
     return spec
 

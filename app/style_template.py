@@ -287,6 +287,11 @@ _ROLE_TO_TOPIC = {
     "area": "area", "面积": "area",
     "value": "value", "价格": "value",
     "cta": "cta",
+    # 复核时人明确填了"这镜是采光/家具/分区"，就照填，别再拿轮换覆盖他的判断
+    "zone": "zone", "分区": "zone", "工区": "zone",
+    "furn": "furn", "家具": "furn",
+    "boss": "boss", "老板间": "boss",
+    "light": "light", "采光": "light",
     "亮点": None, "spot": None, "": None,
 }
 
@@ -314,18 +319,44 @@ def _compact_spec(spec: dict) -> dict:
         return {**spec, "shots": compact}
 
     cursor = 0
+    used: set[str] = set()
+    spots = set(_SPOT_ROTATION)
     shots = []
     for item in scenes:
         role = str(item.get("role") or "")
-        topic = _ROLE_TO_TOPIC.get(role, "light")
+        topic = _ROLE_TO_TOPIC.get(role)
+        # 同一个卖点第二次出现就该换：连着三句"采光通透""整面落地窗""白天不用开灯"
+        # 听着像卡带，而且白占了镜位。只有卖点类需要换，钩子/收尾本来就各一句。
+        if topic in used and topic in spots:
+            topic = None
         if topic is None:
-            topic = _SPOT_ROTATION[cursor % len(_SPOT_ROTATION)]
-            cursor += 1
+            for offset in range(len(_SPOT_ROTATION)):
+                candidate = _SPOT_ROTATION[(cursor + offset) % len(_SPOT_ROTATION)]
+                if candidate not in used:
+                    topic = candidate
+                    cursor = (cursor + offset + 1) % len(_SPOT_ROTATION)
+                    break
+            else:
+                topic = _SPOT_ROTATION[cursor % len(_SPOT_ROTATION)]
+                cursor += 1
+        used.add(topic)
         shots.append({
             "index": len(shots) + 1,
             "role": topic,
             "sample": "",
             "subject": item.get("subject", ""),
+        })
+
+    # 参考片里没有收尾镜时补一镜。空房实拍素材几乎都没有引导（拍完就走），
+    # 但没有收尾的片子等于没告诉观众下一步干什么，套用后必须补上。
+    # 注意别把这句塞进最后一镜：那是"长条工位桌"，配"感兴趣的老板过来看看"是错位。
+    if shots and all(shot["role"] != "cta" for shot in shots):
+        shots.append({
+            "index": len(shots) + 1,
+            "role": "cta",
+            "sample": "",
+            "subject": "补拍：收尾引导（参考片没有这一镜）",
+            "added": True,
         })
     return {**spec, "shots": shots}
 
