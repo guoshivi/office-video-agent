@@ -235,14 +235,17 @@ def context(facts: dict) -> dict[str, str]:
     if rent_text:
         ctx["rent"] = rent_text
 
+    # 工位数只要有面积就能估（行业经验 8 平/工位），不该非得有租金才算——
+    # 「这一层能摆下多少个工位」是最常说的卖点之一，跟报不报价无关
+    seats = max(2, math.ceil(area_number / 8)) if area_number else None
+    if seats:
+        ctx["seats"] = str(seats)
+
     monthly = monthly_rent(facts, area_number)
     if monthly and monthly > 0:
         ctx["monthly"] = _money(monthly)
         ctx["daily"] = _daily_money(monthly / 30)
-
-        seats = max(2, math.ceil(area_number / 8)) if area_number else None
         if seats:
-            ctx["seats"] = str(seats)
             ctx["per_person"] = _money(monthly / seats)
 
     return ctx

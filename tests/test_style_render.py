@@ -96,3 +96,51 @@ def test_render_rejects_bad_audio_mode(tmp_path):
 
     with pytest.raises(RenderError):
         render_storyboard([{"text": "测试"}], "不存在也行.mp4", tmp_path / "out.mp4", audio_mode="环绕声")
+
+
+def test_no_furniture_promise_without_field():
+    """办公室租赁一般不带家具：房源没写「带家具」，画面拍到桌椅也不许承诺配齐。
+
+    回归用：句库 furn 那组四句全是"全套配齐 / 拎包办公"，而模板里
+    "拍到桌椅"的镜头很常见（role=furn）。两件事一叠加，等于默认在说假话——
+    上一个租客还没搬走的桌椅，被讲成了交付配置，客户来看房发现搬空了要吵。
+    """
+    board = fallback_storyboard(SPEC, {"area": "220", "partition": "3加1格局"})
+    text = "".join(entry["text"] for entry in board)
+    for word in ("配齐", "全套", "拎包", "家具全送", "一分钱不用花"):
+        assert word not in text, text
+
+
+def test_furniture_line_only_when_field_says_so():
+    """房源表明确写了带家具，才允许讲家具。"""
+    facts = {"area": "220", "partition": "3加1格局", "furnishing_layout": "带全套家具"}
+    board = fallback_storyboard(SPEC, facts)
+    text = "".join(entry["text"] for entry in board)
+    assert any(word in text for word in ("配齐", "全套", "拎包")), text
+
+
+def test_has_furniture_needs_explicit_wording():
+    """家具那栏常被填成"毛坯/电梯口/展厅"，这些都不算带家具。"""
+    from app.copywriting import _has_furniture
+
+    assert not _has_furniture({})
+    assert not _has_furniture({"家具": "毛坯"})
+    assert not _has_furniture({"家具": "电梯口"})
+    assert not _has_furniture({"家具": "带露台"})
+    assert _has_furniture({"家具": "带家具"})
+    assert _has_furniture({"家具": "带全套家具"})
+
+
+def test_desk_phrase_does_not_inflate():
+    """工位量级要按 high 落在哪一档报，不能"≤300 就说两百多个"。
+
+    回归用：800 平按 7.5~10.5 平/位是 76~107 个，旧逻辑报成"两百多个"，
+    报多一倍——客户一进场就露馅，比不说还糟。
+    """
+    from app.services import _desk_phrase
+
+    assert _desk_phrase(800) == "近百个"
+    assert _desk_phrase(1600) == "两百多个"
+    assert _desk_phrase(4000) == "三百个以上"
+    # 小面积报区间，且是中文数字（口播念得出来）
+    assert _desk_phrase(60) == "六个到八个之间"

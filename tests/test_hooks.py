@@ -134,3 +134,15 @@ def test_titles_fit_platform_limits():
 def test_titles_survive_missing_rent():
     titles = build_titles({"区域": "望京", "面积": "180"})
     assert titles["douyin"], "租金算不出来也得有标题，不能空着"
+
+
+def test_seats_available_without_rent():
+    """工位数只要面积就能估，不该非得有租金才算。
+
+    「这一层能摆下多少个工位」是最常说的卖点之一，跟报不报价无关；
+    以前 seats 写在 `if monthly` 里面，没租金这一整句就出不来。
+    """
+    ctx = hooks.context({"面积": "800平"})
+    assert ctx.get("seats") == "100"
+    assert "monthly" not in ctx
+    assert "per_person" not in ctx

@@ -103,14 +103,23 @@ def _workstation_span(sqm: float) -> tuple[int, int]:
 
 
 def _desk_phrase(sqm: float) -> str:
-    """工位数说成人话：小数报区间，大数只报量级。"""
+    """工位数说成人话：小数报区间，大数只报量级。
+
+    量级必须按 high 落在哪一档来报，不能一句"≤300 就说两百多个"糊过去：
+    800 平按 7.5~10.5 平/位是 76~107 个，照旧逻辑会报成"两百多个"，
+    报多一倍，客户一进场就露馅。
+    """
     low, high = _workstation_span(sqm)
     if high <= 30:
         return f"{_cn_number(low)}个到{_cn_number(high)}个之间"
     if high <= 100:
         mid = int(round((low + high) / 2 / 5) * 5)
         return f"{_cn_number(mid)}个上下"
-    if high <= 300:
+    if high <= 130:
+        return "近百个"
+    if high <= 200:
+        return "一百多个"
+    if high <= 350:
         return "两百多个"
     return "三百个以上"
 
@@ -324,11 +333,17 @@ def generate_script(property_row, target_duration: int = 45) -> tuple[str, list[
     script = "".join(lines)
 
     warnings = ["这是基于房源字段生成的口播稿，未经视频画面核验，出片前请过一遍。"]
-    missing = [label for label, value in (
-        ("朝向", orientation), ("家具情况", furnishing),
-    ) if not value]
-    if missing:
-        warnings.append(f"房源表里{'、'.join(missing)}是空的，文案已用通用说法兜住；补上这几列，稿子会更具体。")
+    # 家具单独说，不并进下面那句"通用说法"：它不是缺字段那么简单，
+    # 而是决定了文案能不能提家具（办公室租赁一般不带家具）。
+    if not orientation:
+        warnings.append("房源表里朝向是空的，文案已用通用说法兜住；补上这一列，稿子会更具体。")
+    if not furnishing:
+        # 办公室租赁一般不带家具，画面里的桌椅多半是上一个租客还没搬走
+        warnings.append(
+            "家具这一栏空着，文案按「不带家具」写：看到画面里的桌椅也不会说成配齐；"
+            "确实带家具就把这一栏填上（写「带家具」），文案才会讲这一条。"
+        )
+
     if sqm:
         warnings.append("工位数是按行业经验（约 7.5–10.5 平/工位）估算的，跟实际摆法会有出入。")
     if property_row["rent_raw"]:
