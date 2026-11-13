@@ -177,6 +177,7 @@ class SettingsUpdate(BaseModel):
     tts_provider: str = Field(default="auto", max_length=10)
     tts_appid: str = Field(default="", max_length=120)
     tts_token: str = Field(default="", max_length=500)
+    tts_apikey: str = Field(default="", max_length=200)
     tts_cluster: str = Field(default="volcano_tts", max_length=40)
     tts_endpoint: str = Field(default="", max_length=200)
     tts_voice_female: str = Field(default="", max_length=120)

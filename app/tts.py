@@ -141,15 +141,18 @@ def price_splits(text: str, max_splits: int = 2) -> list[str]:
     return pieces
 
 
-# 火山的两套鉴权：新版控制台给 API Key（X-Api-Key），老版给 appid + access token。
-# 两种都支持，用户拿到哪种填哪种，不用去理解区别。
+# 火山的两套鉴权，两种都支持，用户拿到哪种填哪种：
+# - 新版控制台：一个 API Key 搞定，走 v3 接口（X-Api-Key 请求头）
+# - 老版控制台：appid + access token，走 v1 接口（官方说后续会下线，留着兼容）
 DEFAULT_ENDPOINT = "https://openspeech.bytedance.com/api/v1/tts"
+V3_ENDPOINT = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
 
 PROVIDERS = {
     "volcano": {
         "label": "豆包语音合成（火山引擎）",
         "env_appid": "VOLC_TTS_APPID",
         "env_token": "VOLC_TTS_TOKEN",
+        "env_apikey": "VOLC_TTS_APIKEY",
     },
     "edge": {
         "label": "edge-tts（免费兜底）",
@@ -195,6 +198,7 @@ def config() -> dict:
         provider = "auto"
     appid = _pick(settings, "tts_appid", "VOLC_TTS_APPID")
     token = _pick(settings, "tts_token", "VOLC_TTS_TOKEN")
+    apikey = _pick(settings, "tts_apikey", "VOLC_TTS_APIKEY")
     cluster = str(settings.get("tts_cluster") or "").strip() or "volcano_tts"
     female = str(settings.get("tts_voice_female") or "").strip()
     male = str(settings.get("tts_voice_male") or "").strip()
@@ -202,14 +206,15 @@ def config() -> dict:
         "provider": provider,
         "appid": appid,
         "token": token,
+        "apikey": apikey,
         "cluster": cluster,
         "endpoint": str(settings.get("tts_endpoint") or "").strip() or DEFAULT_ENDPOINT,
         "voice_female": female,
         "voice_male": male,
         "emotion": str(settings.get("tts_emotion") or "").strip(),
         "emotion_scale": _clamp_float(settings.get("tts_emotion_scale"), 1.0, 5.0, 4.0),
-        # 只要 appid 和 token 齐了就算可用；音色 id 缺哪个性别就哪个性别退回 edge
-        "ready": bool(appid and token),
+        # 新版一个 Key 就算可用；老版要 appid + token 两个都在
+        "ready": bool(apikey or (appid and token)),
     }
 
 
@@ -231,7 +236,7 @@ def status() -> dict:
     if provider == "edge":
         return {"provider": "edge", "label": PROVIDERS["edge"]["label"], "ready": True, "detail": "按免费方案配音"}
     if not conf["ready"]:
-        detail = "没填火山凭据，先用免费配音；填了就能用豆包音色" if provider == "auto" else "选了豆包语音，但 appid / token 还没填"
+        detail = "没填火山凭据，先用免费配音；填了就能用豆包音色" if provider == "auto" else "选了豆包语音，但 API Key（或老版 appid / token）还没填"
         return {"provider": "edge" if provider == "auto" else "volcano", "label": "edge-tts", "ready": provider == "auto", "detail": detail}
     voices = [v for v in (conf["voice_female"], conf["voice_male"]) if v]
     detail = f"音色 {', '.join(voices)}" if voices else "还没填音色 id，会退回免费配音"
@@ -289,7 +294,84 @@ def _speed_ratio(rate: str) -> float:
 
 
 def _synth_volcano(text: str, out_path: Path, voice: str, rate: str, conf: dict) -> dict:
-    """调一次豆包语音合成，把 base64 音频落到 out_path。返回附加信息（目前是时长）。"""
+    """调豆包语音合成，把音频落到 out_path。有新版 API Key 走 v3，否则走老版 v1。"""
+    if conf.get("apikey"):
+        return _synth_volcano_v3(text, out_path, voice, rate, conf)
+    return _synth_volcano_v1(text, out_path, voice, rate, conf)
+
+
+# v3 的「情感」用语音指令表达：emotion 参数是 v1 的东西，v3 只认 context_texts。
+# 指令文字不计费，写口语化的自然句，比参数版更接近真人说话的情绪。
+_EMOTION_PROMPTS = {
+    "happy": "请你用开心、明快的语气说话。",
+    "excited": "请你用兴奋、有感染力的语气说话。",
+    "sad": "请你用低落、缓慢的语气说话。",
+    "angry": "请你用生气、严厉的语气说话。",
+    "surprised": "请你用惊讶的语气说话。",
+    "coldness": "请你用冷静、平淡的语气说话。",
+    "neutral": "请你用平和中性的语气说话。",
+}
+
+
+def _synth_volcano_v3(text: str, out_path: Path, voice: str, rate: str, conf: dict) -> dict:
+    """新版控制台：API Key 鉴权，HTTP Chunked 流式返回，base64 分段拼成整段音频。"""
+    req_params: dict = {
+        "text": text,
+        "speaker": voice,
+        "audio_params": {
+            "format": "mp3",
+            "sample_rate": 24000,
+            # v3 的语速是整数百分比：+10% → 10，范围 [-50, 100]
+            "speech_rate": max(-50, min(100, round((_speed_ratio(rate) - 1.0) * 100))),
+        },
+    }
+    if conf["emotion"] in _EMOTION_PROMPTS:
+        req_params["context_texts"] = [_EMOTION_PROMPTS[conf["emotion"]]]
+
+    headers = {
+        "X-Api-Key": conf["apikey"],
+        "X-Api-Resource-Id": "seed-tts-2.0",
+        "X-Api-Request-Id": uuid.uuid4().hex,
+        "X-Control-Require-Usage-Tokens-Return": "*",
+    }
+    import base64
+
+    chunks: list[bytes] = []
+    try:
+        with httpx.Client(timeout=60.0, trust_env=False) as client:
+            with client.stream("POST", V3_ENDPOINT, json={"req_params": req_params}, headers=headers) as response:
+                if response.status_code != 200:
+                    body = response.read()[:200]
+                    raise TTSError(f"豆包语音返回 {response.status_code}：{body.decode('utf-8', 'ignore')}")
+                for line in response.iter_lines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if line.startswith("data:"):          # SSE 形态的响应也兼容
+                        line = line[5:].strip()
+                    try:
+                        piece = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    code = piece.get("code", piece.get("status", 0))
+                    if code not in (0, 20000000):
+                        raise TTSError(f"豆包语音失败 code={code}：{str(piece.get('message') or '')[:160]}")
+                    data = piece.get("data")
+                    if data:
+                        chunks.append(base64.b64decode(data))
+                    if piece.get("finish"):
+                        break
+    except httpx.HTTPError as error:
+        raise TTSError(f"连不上豆包语音：{error}") from error
+
+    if not chunks:
+        raise TTSError("豆包语音没有返回音频")
+    out_path.write_bytes(b"".join(chunks))
+    return {}
+
+
+def _synth_volcano_v1(text: str, out_path: Path, voice: str, rate: str, conf: dict) -> dict:
+    """老版控制台：appid + token 鉴权，一次请求返回整段 base64。"""
     payload = {
         "app": {"appid": conf["appid"], "token": conf["token"], "cluster": conf["cluster"]},
         "user": {"uid": "office-video-agent"},

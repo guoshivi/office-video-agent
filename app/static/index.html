@@ -384,8 +384,11 @@
                 <details class="settings-more">
                   <summary>豆包语音凭据与音色（不填就用免费配音）</summary>
                   <div class="form-row">
-                    <label>AppID<input name="tts_appid" placeholder="语音控制台里的 AppID"></label>
-                    <label>Access Token<input name="tts_token" type="password" placeholder="语音控制台里的 Access Token"></label>
+                    <label>API Key（新版控制台，推荐）<input name="tts_apikey" type="password" placeholder="控制台 → API Key 管理里创建的那串"></label>
+                  </div>
+                  <div class="form-row">
+                    <label>AppID（老版控制台才填）<input name="tts_appid" placeholder="老版控制台里的 AppID"></label>
+                    <label>Access Token（老版控制台才填）<input name="tts_token" type="password" placeholder="老版控制台里的 Access Token"></label>
                   </div>
                   <div class="form-row">
                     <label>女声音色 ID<input name="tts_voice_female" placeholder="例如 zh_female_xxx_bigtts"></label>

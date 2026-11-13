@@ -336,3 +336,249 @@ def test_price_splits_caps_at_two_cuts():
     """一句最多两刀：价格多半在句尾，切出三段就是切错了。"""
     text = "月租6500/月，押金10000，物业费2.6元/㎡/天。"
     assert len(tts.price_splits(text)) <= 3
+
+
+# ------------------------------------------------------------------ v3 接口
+
+class _FakeChunkedResponse:
+    """假装 httpx 的流式响应：逐行吐 JSON，data 是 base64 音频段。"""
+
+    def __init__(self, lines: list[str]):
+        self._lines = lines
+        self.status_code = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def iter_lines(self):
+        yield from self._lines
+
+    def read(self):
+        return b""
+
+
+def _fake_stream(lines: list[str]):
+    """把 httpx.Client 换成只吐给定行的假货。"""
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def stream(self, method, url, json=None, headers=None):
+            return _FakeChunkedResponse(lines)
+
+    return _Client()
+
+
+def test_v3_chunked_response_is_concatenated(tmp_path, monkeypatch):
+    """音频分段返回，拼起来才是完整一句话；SSE 的 data: 前缀也要能吃。"""
+    import base64
+
+    part1, part2 = base64.b64encode(b"AAAABBBB"), base64.b64encode(b"CCCC")
+    lines = [
+        f'{{"code": 0, "data": "{part1.decode()}", "finish": false}}',
+        f'data: {{"code": 0, "data": "{part2.decode()}", "finish": true}}',
+    ]
+    monkeypatch.setattr(tts.httpx, "Client", lambda **kw: _fake_stream(lines))
+    conf = {**tts.config(), "apikey": "test-key", "emotion": ""}
+    out = tmp_path / "v.mp3"
+    tts._synth_volcano_v3("念一句。", out, "zh_female_xiaohe_uranus_bigtts", "+10%", conf)
+    assert out.read_bytes() == b"AAAABBBBCCCC"
+
+
+def test_v3_error_code_raises_instead_of_writing_silence(tmp_path, monkeypatch):
+    """服务端报错（比如音色 ID 不对）必须抛出来，不能把空音频当成功。"""
+    lines = ['{"code": 55000000, "message": "resource ID is mismatched with speaker related resource"}']
+    monkeypatch.setattr(tts.httpx, "Client", lambda **kw: _fake_stream(lines))
+    conf = {**tts.config(), "apikey": "test-key", "emotion": ""}
+    with pytest.raises(tts.TTSError, match="55000000"):
+        tts._synth_volcano_v3("念一句。", tmp_path / "v.mp3", "bad_voice", "+0%", conf)
+
+
+def test_v3_speech_rate_clamps_into_api_range(tmp_path, monkeypatch):
+    """v3 语速是 [-50, 100] 的整数：edge 的 +10% → 10，+300% 要被夹到 100。"""
+    import base64
+
+    captured = {}
+
+    class _Resp(_FakeChunkedResponse):
+        pass
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def stream(self, method, url, json=None, headers=None):
+            captured["payload"] = json
+            part = base64.b64encode(b"audio").decode()
+            return _FakeChunkedResponse([f'{{"code": 0, "data": "{part}", "finish": true}}'])
+
+    monkeypatch.setattr(tts.httpx, "Client", lambda **kw: _Client())
+    conf = {**tts.config(), "apikey": "test-key", "emotion": ""}
+    tts._synth_volcano_v3("x", tmp_path / "a.mp3", "v", "+10%", conf)
+    assert captured["payload"]["req_params"]["audio_params"]["speech_rate"] == 10
+    tts._synth_volcano_v3("x", tmp_path / "b.mp3", "v", "+300%", conf)
+    assert captured["payload"]["req_params"]["audio_params"]["speech_rate"] == 100
+
+
+def test_v3_emotion_becomes_voice_instruction(tmp_path, monkeypatch):
+    """v3 没有 emotion 参数：设置里的情感翻成语音指令 context_texts。"""
+    import base64
+
+    captured = {}
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def stream(self, method, url, json=None, headers=None):
+            captured["payload"] = json
+            part = base64.b64encode(b"audio").decode()
+            return _FakeChunkedResponse([f'{{"code": 0, "data": "{part}", "finish": true}}'])
+
+    monkeypatch.setattr(tts.httpx, "Client", lambda **kw: _Client())
+    conf = {**tts.config(), "apikey": "test-key", "emotion": "happy"}
+    tts._synth_volcano_v3("x", tmp_path / "v.mp3", "v", "+0%", conf)
+    assert captured["payload"]["req_params"]["context_texts"] == [tts._EMOTION_PROMPTS["happy"]]
+
+
+def test_apikey_alone_marks_ready():
+    """新版控制台只发一个 API Key：有 Key 就算可用，不再等 appid+token。"""
+    _settings(tts_apikey="a-key", tts_voice_female="zh_female_xiaohe_uranus_bigtts")
+    conf = tts.config()
+    assert conf["ready"] is True
+    assert conf["apikey"] == "a-key"
+
+
+# ------------------------------------------------------------------ v3 接口
+
+class _FakeChunkedResponse:
+    """假装 httpx 的流式响应：逐行吐 JSON，data 是 base64 音频段。"""
+
+    def __init__(self, lines: list[str]):
+        self._lines = lines
+        self.status_code = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def iter_lines(self):
+        yield from self._lines
+
+    def read(self):
+        return b""
+
+
+def _fake_stream(lines: list[str]):
+    """把 httpx.Client 换成只吐给定行的假货。"""
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def stream(self, method, url, json=None, headers=None):
+            return _FakeChunkedResponse(lines)
+
+    return _Client()
+
+
+def test_v3_chunked_response_is_concatenated(tmp_path, monkeypatch):
+    """音频分段返回，拼起来才是完整一句话；SSE 的 data: 前缀也要能吃。"""
+    import base64
+
+    part1, part2 = base64.b64encode(b"AAAABBBB"), base64.b64encode(b"CCCC")
+    lines = [
+        f'{{"code": 0, "data": "{part1.decode()}", "finish": false}}',
+        f'data: {{"code": 0, "data": "{part2.decode()}", "finish": true}}',
+    ]
+    monkeypatch.setattr(tts.httpx, "Client", lambda **kw: _fake_stream(lines))
+    conf = {**tts.config(), "apikey": "test-key", "emotion": ""}
+    out = tmp_path / "v.mp3"
+    tts._synth_volcano_v3("念一句。", out, "zh_female_xiaohe_uranus_bigtts", "+10%", conf)
+    assert out.read_bytes() == b"AAAABBBBCCCC"
+
+
+def test_v3_error_code_raises_instead_of_writing_silence(tmp_path, monkeypatch):
+    """服务端报错（比如音色 ID 不对）必须抛出来，不能把空音频当成功。"""
+    lines = ['{"code": 55000000, "message": "resource ID is mismatched with speaker related resource"}']
+    monkeypatch.setattr(tts.httpx, "Client", lambda **kw: _fake_stream(lines))
+    conf = {**tts.config(), "apikey": "test-key", "emotion": ""}
+    with pytest.raises(tts.TTSError, match="55000000"):
+        tts._synth_volcano_v3("念一句。", tmp_path / "v.mp3", "bad_voice", "+0%", conf)
+
+
+def test_v3_speech_rate_clamps_into_api_range(tmp_path, monkeypatch):
+    """v3 语速是 [-50, 100] 的整数：edge 的 +10% → 10，+300% 要被夹到 100。"""
+    import base64
+
+    captured = {}
+
+    class _Resp(_FakeChunkedResponse):
+        pass
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def stream(self, method, url, json=None, headers=None):
+            captured["payload"] = json
+            part = base64.b64encode(b"audio").decode()
+            return _FakeChunkedResponse([f'{{"code": 0, "data": "{part}", "finish": true}}'])
+
+    monkeypatch.setattr(tts.httpx, "Client", lambda **kw: _Client())
+    conf = {**tts.config(), "apikey": "test-key", "emotion": ""}
+    tts._synth_volcano_v3("x", tmp_path / "a.mp3", "v", "+10%", conf)
+    assert captured["payload"]["req_params"]["audio_params"]["speech_rate"] == 10
+    tts._synth_volcano_v3("x", tmp_path / "b.mp3", "v", "+300%", conf)
+    assert captured["payload"]["req_params"]["audio_params"]["speech_rate"] == 100
+
+
+def test_v3_emotion_becomes_voice_instruction(tmp_path, monkeypatch):
+    """v3 没有 emotion 参数：设置里的情感翻成语音指令 context_texts。"""
+    import base64
+
+    captured = {}
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def stream(self, method, url, json=None, headers=None):
+            captured["payload"] = json
+            part = base64.b64encode(b"audio").decode()
+            return _FakeChunkedResponse([f'{{"code": 0, "data": "{part}", "finish": true}}'])
+
+    monkeypatch.setattr(tts.httpx, "Client", lambda **kw: _Client())
+    conf = {**tts.config(), "apikey": "test-key", "emotion": "happy"}
+    tts._synth_volcano_v3("x", tmp_path / "v.mp3", "v", "+0%", conf)
+    assert captured["payload"]["req_params"]["context_texts"] == [tts._EMOTION_PROMPTS["happy"]]
+
+
+def test_apikey_alone_marks_ready():
+    """新版控制台只发一个 API Key：有 Key 就算可用，不再等 appid+token。"""
+    _settings(tts_apikey="a-key", tts_voice_female="zh_female_xiaohe_uranus_bigtts")
+    conf = tts.config()
+    assert conf["ready"] is True
+    assert conf["apikey"] == "a-key"
