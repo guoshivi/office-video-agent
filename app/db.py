@@ -378,6 +378,12 @@ def init_db() -> None:
         _ensure_column(connection, "tasks", "subtitle_bottom", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(connection, "tasks", "tts_rate", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(connection, "tasks", "flower", "TEXT NOT NULL DEFAULT ''")
+        # 画面四件套也能逐条覆盖：叠化 / 逐字 / 底条 / 进度条。
+        # 同一批素材想做两种风格试水时，不用来回改全局设置。
+        _ensure_column(connection, "tasks", "render_xfade", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(connection, "tasks", "render_caption_pop", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(connection, "tasks", "render_caption_box", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(connection, "tasks", "render_progress", "TEXT NOT NULL DEFAULT ''")
         for key, value in DEFAULT_SETTINGS.items():
             connection.execute(
                 "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",

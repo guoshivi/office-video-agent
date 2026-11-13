@@ -586,6 +586,30 @@
               <option value="0">关（画面干净）</option>
             </select></label>
           </div>
+          <div class="form-row">
+            <label>镜头衔接<select name="render_xfade">
+              <option value="">跟设置</option>
+              <option value="1">叠化（软过渡）</option>
+              <option value="0">硬切（节奏更快）</option>
+            </select></label>
+            <label>字幕逐字<select name="render_caption_pop">
+              <option value="">跟设置</option>
+              <option value="1">逐字显现</option>
+              <option value="0">整句出现</option>
+            </select></label>
+          </div>
+          <div class="form-row">
+            <label>字幕底条<select name="render_caption_box">
+              <option value="">跟设置</option>
+              <option value="1">有（浅色画面更清楚）</option>
+              <option value="0">无（干净，直接压画面）</option>
+            </select></label>
+            <label>底部进度条<select name="render_progress">
+              <option value="">跟设置</option>
+              <option value="1">有</option>
+              <option value="0">无</option>
+            </select></label>
+          </div>
           <p class="form-extra-note">只对你这一条视频生效，不动系统设置。BGM、运镜、花字风格和密度这类一次调好就不改的，去系统设置里统一改。</p>
         </details>
       </div>
@@ -696,6 +720,30 @@
                 <option value="">跟设置</option>
                 <option value="1">开</option>
                 <option value="0">关</option>
+              </select></label>
+            </div>
+            <div class="form-row">
+              <label>镜头衔接<select id="detail-render-xfade">
+                <option value="">跟设置</option>
+                <option value="1">叠化</option>
+                <option value="0">硬切</option>
+              </select></label>
+              <label>字幕逐字<select id="detail-render-caption-pop">
+                <option value="">跟设置</option>
+                <option value="1">逐字显现</option>
+                <option value="0">整句出现</option>
+              </select></label>
+            </div>
+            <div class="form-row">
+              <label>字幕底条<select id="detail-render-caption-box">
+                <option value="">跟设置</option>
+                <option value="1">有</option>
+                <option value="0">无</option>
+              </select></label>
+              <label>底部进度条<select id="detail-render-progress">
+                <option value="">跟设置</option>
+                <option value="1">有</option>
+                <option value="0">无</option>
               </select></label>
             </div>
             <p class="form-extra-note">改完点「提交真实出片」生效。</p>

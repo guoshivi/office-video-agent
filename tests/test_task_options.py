@@ -159,3 +159,100 @@ def test_store_drops_unknown_values():
     # 认不出的值一律写空，出片时自然回落设置，而不是带着脏值去渲染
     assert row["subtitle_size"] == ""
     assert row["flower"] == ""
+
+
+# ---------------------------------------------------------------- 画面四件套
+
+
+def test_local_task_can_turn_switches_off():
+    """设置里开着，任务上选「关」，这条片子就得关——试风格不用改全局。"""
+    with transaction() as connection:
+        for key in ("render_xfade", "render_caption_pop", "render_caption_box", "render_progress"):
+            connection.execute(
+                "INSERT OR REPLACE INTO settings(key, value) VALUES (?, '1')", (key,)
+            )
+    visual = _local_audio_visual_settings(
+        "V1",
+        _task(render_xfade="0", render_caption_pop="0", render_caption_box="0", render_progress="0"),
+    )
+    assert visual["xfade"] is False
+    assert visual["caption_pop"] is False
+    assert visual["caption_box"] is False
+    assert visual["caption_progress"] is False
+
+
+def test_local_switch_blank_follows_setting():
+    """任务上没选（空串）就老老实实跟设置，不能自己猜一个默认。"""
+    with transaction() as connection:
+        for key in ("render_xfade", "render_caption_pop", "render_caption_box", "render_progress"):
+            connection.execute(
+                "INSERT OR REPLACE INTO settings(key, value) VALUES (?, '0')", (key,)
+            )
+    visual = _local_audio_visual_settings("V1", _task())
+    assert visual["xfade"] is False
+    assert visual["caption_pop"] is False
+    assert visual["caption_box"] is False
+    assert visual["caption_progress"] is False
+
+
+def test_local_switch_garbage_falls_back():
+    """手改库写进奇怪的值，当没填处理，别把它当真。"""
+    with transaction() as connection:
+        connection.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('render_xfade', '1')")
+    visual = _local_audio_visual_settings("V1", _task(render_xfade="yes"))
+    assert visual["xfade"] is True
+
+
+def test_store_switches_round_trip():
+    from app.services import set_task_render_options
+
+    init_db()
+    with transaction() as connection:
+        connection.execute(
+            "INSERT INTO properties(id, created_at, updated_at)"
+            " VALUES ('p3', '2026-01-01', '2026-01-01')"
+        )
+        connection.execute(
+            """INSERT INTO tasks(id, task_no, property_id, source, original_filename,
+               source_video_path, target_duration, aspect_ratio, voice, style, script,
+               warnings_json, status, created_at, updated_at)
+               VALUES ('t3', 'V3', 'p3', 'webui', 'a.mp4', '', 45, '9:16',
+                       'female_warm', 'professional', '文案。', '[]', 'script_ready',
+                       '2026-01-01', '2026-01-01')"""
+        )
+    set_task_render_options(
+        "t3", render_xfade="0", render_caption_pop="1",
+        render_caption_box="0", render_progress="1",
+    )
+    with transaction() as connection:
+        row = connection.execute("SELECT * FROM tasks WHERE id='t3'").fetchone()
+    assert row["render_xfade"] == "0"
+    assert row["render_caption_pop"] == "1"
+    assert row["render_caption_box"] == "0"
+    assert row["render_progress"] == "1"
+
+
+# ---------------------------------------------------------------- 队列状态
+
+
+def test_task_list_carries_review_and_publish_state():
+    """任务状态停在 completed，但列表要能看出「审没审、发没发」。"""
+    from app.services import attach_queue_states
+
+    init_db()
+    with transaction() as connection:
+        connection.execute(
+            "INSERT OR REPLACE INTO review_items(id, task_id, status, created_at, updated_at)"
+            " VALUES ('r1', 'tx', 'approved', '2026-01-01', '2026-01-01')"
+        )
+        connection.execute(
+            """INSERT OR REPLACE INTO publish_records(
+                id, task_id, platform, status, created_at, updated_at)
+               VALUES ('pb1', 'tx', 'douyin', 'published', '2026-01-01', '2026-01-01')"""
+        )
+    items = attach_queue_states([{"id": "tx"}, {"id": "ty"}])
+    assert items[0]["review_status"] == "approved"
+    assert items[0]["publish_status"] == {"douyin": "published"}
+    # 没进队列的任务不能编一个状态出来
+    assert items[1]["review_status"] == ""
+    assert items[1]["publish_status"] == {}

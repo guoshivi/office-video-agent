@@ -30,6 +30,7 @@ from .shots import (
     save_storyboard,
 )
 from .services import (
+    attach_queue_states,
     create_task_record,
     export_workbench_package,
     generate_script,
@@ -371,7 +372,12 @@ def list_tasks(limit: int = Query(default=100, ge=1, le=500), offset: int = Quer
                ORDER BY t.created_at DESC LIMIT ? OFFSET ?""",
             (limit, offset),
         ).fetchall()
-    return {"items": [serialize_task(row, include_script=False) for row in rows], "total": total}
+    return {
+        "items": attach_queue_states(
+            [serialize_task(row, include_script=False) for row in rows]
+        ),
+        "total": total,
+    }
 
 
 class CopyGenerate(BaseModel):
@@ -535,6 +541,10 @@ async def create_task(
     subtitle_bottom: str = Form(default=""),
     tts_rate: str = Form(default=""),
     flower: str = Form(default=""),
+    render_xfade: str = Form(default=""),
+    render_caption_pop: str = Form(default=""),
+    render_caption_box: str = Form(default=""),
+    render_progress: str = Form(default=""),
 ):
     if not (target_duration == 0 or 10 <= target_duration <= 180):
         raise HTTPException(400, "目标时长需在 10–180 秒之间，或填 0 表示跟随原素材时长")
@@ -583,6 +593,10 @@ async def create_task(
             subtitle_bottom=subtitle_bottom,
             tts_rate=tts_rate,
             flower=flower,
+            render_xfade=render_xfade,
+            render_caption_pop=render_caption_pop,
+            render_caption_box=render_caption_box,
+            render_progress=render_progress,
         )
     except Exception:
         shutil.rmtree(task_dir, ignore_errors=True)
@@ -594,7 +608,7 @@ def task_detail(task_id: str):
     row = get_task(task_id)
     if row is None:
         raise HTTPException(404, "任务不存在")
-    return serialize_task(row)
+    return attach_queue_states([serialize_task(row)])[0]
 
 
 class TtsPreviewRequest(BaseModel):
@@ -672,6 +686,10 @@ class RenderOptionsUpdate(BaseModel):
     subtitle_bottom: str = Field(default="", max_length=12)
     tts_rate: str = Field(default="", max_length=12)
     flower: str = Field(default="", max_length=2)
+    render_xfade: str = Field(default="", max_length=2)
+    render_caption_pop: str = Field(default="", max_length=2)
+    render_caption_box: str = Field(default="", max_length=2)
+    render_progress: str = Field(default="", max_length=2)
 
 
 @app.put("/api/tasks/{task_id}/render-options")
@@ -684,6 +702,10 @@ def update_render_options(task_id: str, payload: RenderOptionsUpdate):
         subtitle_bottom=payload.subtitle_bottom,
         tts_rate=payload.tts_rate,
         flower=payload.flower,
+        render_xfade=payload.render_xfade,
+        render_caption_pop=payload.render_caption_pop,
+        render_caption_box=payload.render_caption_box,
+        render_progress=payload.render_progress,
     ) is False:
         raise HTTPException(404, "任务不存在")
     return serialize_task(get_task(task_id))

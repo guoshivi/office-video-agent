@@ -400,6 +400,10 @@ def create_task_record(
     subtitle_bottom: str = "",
     tts_rate: str = "",
     flower: str = "",
+    render_xfade: str = "",
+    render_caption_pop: str = "",
+    render_caption_box: str = "",
+    render_progress: str = "",
 ) -> str:
     """WebUI 与飞书共用的唯一建任务入口，避免两个入口各写一套状态机。
 
@@ -422,8 +426,9 @@ def create_task_record(
                 id, task_no, property_id, source, original_filename, source_video_path,
                 target_duration, aspect_ratio, voice, style, script, warnings_json,
                 status, notify_chat_id, audio_mode, subtitle_size, subtitle_bottom,
-                tts_rate, flower, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'script_ready', ?, ?, ?, ?, ?, ?, ?, ?)""",
+                tts_rate, flower, render_xfade, render_caption_pop, render_caption_box,
+                render_progress, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'script_ready', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 task_id, task_no or new_task_no(), property_row["id"], source,
                 original_filename, str(video_path), target_duration, aspect_ratio,
@@ -433,6 +438,10 @@ def create_task_record(
                 _pick(subtitle_bottom, RENDER_OPTION_VALUES["subtitle_bottom"]),
                 (tts_rate or "").strip(),
                 _pick(flower, {"0", "1"}),
+                _pick(render_xfade, {"0", "1"}),
+                _pick(render_caption_pop, {"0", "1"}),
+                _pick(render_caption_box, {"0", "1"}),
+                _pick(render_progress, {"0", "1"}),
                 now, now,
             ),
         )
@@ -459,20 +468,29 @@ def set_task_render_options(
     subtitle_bottom: str = "",
     tts_rate: str = "",
     flower: str = "",
+    render_xfade: str = "",
+    render_caption_pop: str = "",
+    render_caption_box: str = "",
+    render_progress: str = "",
 ) -> bool:
     """改这条任务的观感覆盖项。传空字符串就是退回「跟设置」。
 
-    只动这四列：改名目的时候不影响其它字段，也不触发重出片。
+    只动这几列：改名目的时候不影响其它字段，也不触发重出片。
     """
     with transaction() as connection:
         cursor = connection.execute(
             """UPDATE tasks SET subtitle_size=?, subtitle_bottom=?, tts_rate=?,
-               flower=?, updated_at=? WHERE id=?""",
+               flower=?, render_xfade=?, render_caption_pop=?, render_caption_box=?,
+               render_progress=?, updated_at=? WHERE id=?""",
             (
                 _pick(subtitle_size, RENDER_OPTION_VALUES["subtitle_size"]),
                 _pick(subtitle_bottom, RENDER_OPTION_VALUES["subtitle_bottom"]),
                 (tts_rate or "").strip(),
                 _pick(flower, {"0", "1"}),
+                _pick(render_xfade, {"0", "1"}),
+                _pick(render_caption_pop, {"0", "1"}),
+                _pick(render_caption_box, {"0", "1"}),
+                _pick(render_progress, {"0", "1"}),
                 utc_now(),
                 task_id,
             ),
@@ -555,6 +573,34 @@ def get_task(task_id: str):
     return row
 
 
+def attach_queue_states(items: list[dict]) -> list[dict]:
+    """给任务列表补上「审没审、发没发」。
+
+    出片跑完任务状态就停在 completed，审核结论记在 review_items、发布记在
+    publish_records。只看任务状态的话，人分不清这条片子是「刚出完」还是
+    「审过发了」——所以列表里把这两个状态一起带出来。
+    """
+    if not items:
+        return items
+    ids = [item["id"] for item in items]
+    holes = ",".join("?" * len(ids))
+    review: dict[str, str] = {}
+    publish: dict[str, dict[str, str]] = {}
+    with transaction() as connection:
+        for row in connection.execute(
+            f"SELECT task_id, status FROM review_items WHERE task_id IN ({holes})", ids
+        ):
+            review[row["task_id"]] = row["status"]
+        for row in connection.execute(
+            f"SELECT task_id, platform, status FROM publish_records WHERE task_id IN ({holes})", ids
+        ):
+            publish.setdefault(row["task_id"], {})[row["platform"]] = row["status"]
+    for item in items:
+        item["review_status"] = review.get(item["id"], "")
+        item["publish_status"] = publish.get(item["id"], {})
+    return items
+
+
 def serialize_task(row, include_script: bool = True) -> dict:
     result = {
         "id": row["id"],
@@ -577,6 +623,11 @@ def serialize_task(row, include_script: bool = True) -> dict:
         "subtitle_bottom": row["subtitle_bottom"] if "subtitle_bottom" in row.keys() else "",
         "tts_rate": row["tts_rate"] if "tts_rate" in row.keys() else "",
         "flower": row["flower"] if "flower" in row.keys() else "",
+        # 画面四件套同样三态：空=跟设置，"1"=开，"0"=关
+        "render_xfade": row["render_xfade"] if "render_xfade" in row.keys() else "",
+        "render_caption_pop": row["render_caption_pop"] if "render_caption_pop" in row.keys() else "",
+        "render_caption_box": row["render_caption_box"] if "render_caption_box" in row.keys() else "",
+        "render_progress": row["render_progress"] if "render_progress" in row.keys() else "",
         "style": row["style"],
         "status": row["status"],
         "stage": row["stage"],

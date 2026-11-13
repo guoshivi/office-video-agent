@@ -443,6 +443,15 @@ main {
 .status-pill.rejected { color: var(--rose); background: var(--rose-soft); }
 .status-pill.processing { color: var(--sky); background: var(--sky-soft); }
 .status-pill.neutral { color: var(--text-2); }
+.status-pill.skipped { color: var(--text-2); background: rgba(255, 255, 255, 0.06); }
+
+/* 任务行里「审没审 / 发没发」的徽章：横向排一行，不跟表头挤 */
+.task-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 5px;
+}
 
 .mark {
   display: inline-block;

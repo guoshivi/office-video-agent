@@ -1464,6 +1464,17 @@ def _task_value(task_row, key: str) -> str:
         return ""
 
 
+def _flag_or_task(settings: dict, task_row, key: str) -> bool:
+    """任务上选过就听任务的，没选（空串）才回落到系统设置。
+
+    任务级值是 "1"/"0"，和设置里同一个口径，避免两套语义打架。
+    """
+    task_value = _task_value(task_row, key)
+    if task_value in {"0", "1"}:
+        return task_value == "1"
+    return _flag(settings, key)
+
+
 def _local_audio_visual_settings(task_key: str, task_row=None) -> dict:
     """读本机出片的观感参数，供 render_storyboard 用。
 
@@ -1516,10 +1527,10 @@ def _local_audio_visual_settings(task_key: str, task_row=None) -> dict:
         "caption_highlight": _flag(settings, "render_subtitle_highlight"),
         "highlight_source": source if source in {"ai", "rules", "manual"} else "ai",
         "kenburns": _flag(settings, "render_kenburns"),
-        "xfade": _flag(settings, "render_xfade"),
-        "caption_pop": _flag(settings, "render_caption_pop"),
-        "caption_box": _flag(settings, "render_caption_box"),
-        "caption_progress": _flag(settings, "render_progress"),
+        "xfade": _flag_or_task(settings, task_row, "render_xfade"),
+        "caption_pop": _flag_or_task(settings, task_row, "render_caption_pop"),
+        "caption_box": _flag_or_task(settings, task_row, "render_caption_box"),
+        "caption_progress": _flag_or_task(settings, task_row, "render_progress"),
         "tts_rate": _task_value(task_row, "tts_rate") or str(settings.get("render_tts_rate") or "").strip(),
         # 正则兜底：只有「手动【】」不需要
         "caption_highlight_regex": source != "manual",

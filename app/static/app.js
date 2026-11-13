@@ -375,6 +375,26 @@ function fillPropertyOptions(items = state.propertyOptions.length ? state.proper
 
 /* ------------------------------------------------------------------ 视频任务 */
 
+// 出片完任务就停在「已完成」，审没审、发没发是另外两张表的事。
+// 不把这两个状态带到列表里，人就不知道这条片子卡在哪一步。
+const PUBLISH_SHORT = {
+  pending: "排队中",
+  publishing: "发布中",
+  published: "已发",
+  failed: "发布失败",
+  uncertain: "待确认",
+};
+
+function queueTags(task) {
+  const tags = [];
+  if (task.review_status) tags.push(statusPill(task.review_status));
+  Object.entries(task.publish_status || {}).forEach(([platform, status]) => {
+    const name = platform === "douyin" ? "抖音" : "小红书";
+    tags.push(`<span class="status-pill ${escapeHtml(status)}">${escapeHtml(name)}${escapeHtml(PUBLISH_SHORT[status] || status)}</span>`);
+  });
+  return tags.length ? `<small class="task-tags">${tags.join("")}</small>` : "";
+}
+
 async function loadTasks() {
   const data = await api("/api/tasks?limit=100");
   state.tasks = data.items;
@@ -386,7 +406,7 @@ async function loadTasks() {
         <td><strong>${escapeHtml(task.property_label)}</strong><small>${escapeHtml(task.area || "面积待补充")}</small></td>
         <td>${escapeHtml(task.original_filename)}<small>${escapeHtml(SOURCE_LABEL[task.source] || task.source)}</small></td>
         <td>${escapeHtml(task.aspect_ratio)} · ${Number(task.target_duration) > 0 ? task.target_duration + " 秒" : "根据原素材"}</td>
-        <td>${statusPill(task.status)}${task.status === "processing" ? `<small>${escapeHtml(task.stage || "处理中")} · ${task.progress}%</small>` : task.output_video_path ? "<small>成片已就绪</small>" : ""}</td>
+        <td>${statusPill(task.status)}${queueTags(task)}${task.status === "processing" ? `<small>${escapeHtml(task.stage || "处理中")} · ${task.progress}%</small>` : task.output_video_path ? "<small>成片已就绪</small>" : ""}</td>
         <td>${formatDate(task.created_at)}</td>
         <td><button class="text-button" data-task="${task.id}">查看</button></td>
       </tr>`).join("")
@@ -1093,6 +1113,10 @@ function applyTaskDetail(task, initial = true) {
       "#detail-subtitle-bottom": task.subtitle_bottom,
       "#detail-tts-rate": task.tts_rate,
       "#detail-flower": task.flower,
+      "#detail-render-xfade": task.render_xfade,
+      "#detail-render-caption-pop": task.render_caption_pop,
+      "#detail-render-caption-box": task.render_caption_box,
+      "#detail-render-progress": task.render_progress,
     };
     Object.entries(renderFields).forEach(([selector, value]) => {
       const field = $(selector);
@@ -1535,9 +1559,14 @@ $("#render-task").addEventListener("click", async () => {
       subtitle_bottom: $("#detail-subtitle-bottom")?.value || "",
       tts_rate: $("#detail-tts-rate")?.value || "",
       flower: $("#detail-flower")?.value || "",
+      render_xfade: $("#detail-render-xfade")?.value || "",
+      render_caption_pop: $("#detail-render-caption-pop")?.value || "",
+      render_caption_box: $("#detail-render-caption-box")?.value || "",
+      render_progress: $("#detail-render-progress")?.value || "",
     };
     const before = state.currentTask;
-    const changed = ["subtitle_size", "subtitle_bottom", "tts_rate", "flower"]
+    const changed = ["subtitle_size", "subtitle_bottom", "tts_rate", "flower",
+      "render_xfade", "render_caption_pop", "render_caption_box", "render_progress"]
       .some((key) => options[key] !== (before[key] || ""));
     if (changed) {
       await api(`/api/tasks/${state.currentTask.id}/render-options`, {
