@@ -699,7 +699,8 @@ async function loadSettings() {
    ["render_bgm", "1"], ["render_bgm_volume", "0.14"],
    ["render_subtitle_size", "medium"], ["render_subtitle_bottom", "middle"],
    ["render_subtitle_highlight", "1"], ["render_highlight_source", "ai"],
-   ["render_kenburns", "1"], ["render_xfade", "1"], ["tts_provider", "auto"], ["tts_cluster", "volcano_tts"],
+   ["render_kenburns", "1"], ["render_xfade", "1"],
+   ["render_caption_pop", "1"], ["render_caption_box", "1"], ["render_progress", "1"], ["tts_provider", "auto"], ["tts_cluster", "volcano_tts"],
    ["tts_emotion_scale", "4"]].forEach(([name, value]) => {
     if (form.elements[name] && !form.elements[name].value) form.elements[name].value = value;
   });

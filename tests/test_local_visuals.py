@@ -109,8 +109,10 @@ def test_build_ass_highlights_manual_mark():
     )
     # 方括号不能出现在成片字幕里
     assert "【" not in ass and "】" not in ass
-    # 手动标记的词要变金色
-    assert r"{\c&H00D7FF&}拎包入驻" in ass
+    # 手动标记的词要变金色：标签存在，且剥掉 ASS 标签后词完整（逐字 \k 会把字隔开）
+    import re as _re
+    assert r"{\c&H00D7FF&}" in ass
+    assert "拎包入驻" in _re.sub(r"\{[^}]*\}", "", ass)
 
 
 def test_build_ass_uses_highlights_from_ai():
@@ -118,7 +120,9 @@ def test_build_ass_uses_highlights_from_ai():
         [{"text": "紧邻三号线地铁口", "start": 0, "end": 3, "highlights": ["三号线"]}],
         (1080, 1920), "Noto Sans SC Black",
     )
-    assert r"{\c&H00D7FF&}三号线" in ass
+    import re as _re
+    assert r"{\c&H00D7FF&}" in ass
+    assert "三号线" in _re.sub(r"\{[^}]*\}", "", ass)
 
 
 def test_build_ass_takes_size_and_position_from_settings():

@@ -35,7 +35,8 @@ def test_ass_has_one_dialogue_per_sentence_with_timing():
         {"text": "第一句", "start": 0.0, "end": 4.5, "label": {}},
         {"text": "第二句 230平", "start": 4.5, "end": 9.0, "label": {}},
     ]
-    ass = build_ass(sentences, (1080, 1920), "Noto Sans SC Black")
+    ass = build_ass(sentences, (1080, 1920), "Noto Sans SC Black",
+                    pop=False, box=False, progress=False)
     assert ass.count("Dialogue:") == 2
     assert "0:00:04.50,0:00:09.00" in ass
     assert "PlayResX: 1080" in ass
@@ -52,7 +53,8 @@ def test_ass_label_becomes_second_line_not_a_separate_style_run():
 
 def test_ass_escapes_braces_so_text_cannot_inject_tags():
     sentences = [{"text": "面积{随便写}230平", "start": 0.0, "end": 3.0, "label": {}}]
-    ass = build_ass(sentences, (1080, 1920), "Noto Sans SC Black")
+    ass = build_ass(sentences, (1080, 1920), "Noto Sans SC Black",
+                    pop=False, box=False, progress=False)
     body = ass.splitlines()[-1]
     assert "{" not in body.replace(r"{\c&H00D7FF&}", "").replace(r"{\c&HFFFFFF&}", "")
 
@@ -63,7 +65,8 @@ def test_long_sentence_becomes_single_line_captions_on_one_timeline():
         "text": "面积信息为230平，格局为3隔，可容纳20人办公",
         "start": 0.0, "end": 9.0, "spoken": 7.5, "label": {},
     }]
-    ass = build_ass(sentences, (1080, 1920), "Noto Sans SC Black")
+    ass = build_ass(sentences, (1080, 1920), "Noto Sans SC Black",
+                    pop=False, box=False, progress=False)
     captions = [line for line in ass.splitlines() if line.startswith("Dialogue:") and ",Cap," in line]
     assert len(captions) == 3
     # 一条字幕里不许再出现换行符，屏幕上永远只有一行

@@ -73,6 +73,7 @@ AUDIO_MODES = {"mix", "original", "voice", "mute"}
 # 成片最后定格多少秒。定格帧是干净的（字幕已结束），正好给人截图、或者
 # 让画面停在最有说服力的那一格上；不留反而显得"话没说完就切走了"。
 END_HOLD = 1.5
+HOOK_CARD_MAX = 3.2         # 开场房源卡最长挂多久（秒）
 
 # Ken Burns：缓推到 1.12 倍再缓拉回来，交替使用，空镜就有呼吸感
 ZOOM_IN = 0.12             # 最大推近幅度
@@ -402,6 +403,108 @@ def _ass_time(seconds: float) -> str:
     return f"{hours}:{minutes:02d}:{secs:05.2f}"
 
 
+def _typewriter(body: str, seg_start: float, seg_end: float) -> str:
+    r"""把一条字幕正文改成逐字显现（卡拉OK \k）+ 全句呼吸入场。
+
+    原理：\kN 表示这个字先以辅色显示 N 百分之一秒，再翻成主色——
+    把辅色 alpha 设成全透明（\2a&HFF&），效果就是「字到点才出现」。
+    每字时长 = 段时长 / 可见字数，跟现有按字数配权的段落算法同源；
+    中文吐字时长本来就近似均匀，误差远小于观众能察觉的阈值。
+
+    呼吸入场（\\fscx90 \\t 到 100）盖在逐字上面：整句从 90% 弹到满格，
+    告别「啪一下出现」的生硬感。正文里已有的高亮色标签原样保留。
+    """
+    visible = sum(1 for i, ch in enumerate(body) if not _inside_braces(body, i))
+    if visible <= 0:
+        return body
+    span = max(seg_end - seg_start, 0.3)
+    step = max(4, int(round(span * 100 / visible)))
+    out: list[str] = ["{\\2a&HFF&\\fscx90\\fscy90\\t(0,180,\\fscx100\\fscy100)}"]
+    depth = 0
+    for ch in body:
+        if ch == "{":
+            depth += 1
+            out.append(ch)
+        elif ch == "}":
+            depth = max(depth - 1, 0)
+            out.append(ch)
+        else:
+            if depth == 0 and not ch.isspace():
+                out.append(f"{{\\k{step}}}")
+            out.append(ch)
+    return "".join(out)
+
+
+def _inside_braces(body: str, index: int) -> bool:
+    """body[index] 是否在 {...} 标签里。逐字计时只数可见字，标签不算。"""
+    depth = 0
+    for i in range(index):
+        if body[i] == "{":
+            depth += 1
+        elif body[i] == "}":
+            depth = max(depth - 1, 0)
+    return depth > 0 or body[index] == "{"
+
+
+def _rounded_box(w: int, h: int, r: int) -> str:
+    """ASS 绘图指令：一个圆角矩形（贝塞尔修角），坐标是相对锚点的正数。"""
+    r = max(1, min(r, w // 2, h // 2))
+    return (
+        f"m {r} 0 l {w - r} 0 b {w} 0 {w} 0 {w} {r} "
+        f"l {w} {h - r} b {w} {h} {w} {h} {w - r} {h} "
+        f"l {r} {h} b 0 {h} 0 {h} 0 {h - r} "
+        f"l 0 {r} b 0 0 0 0 {r} 0"
+    )
+
+
+def _caption_box_line(piece: str, seg_start: float, seg_end: float,
+                      width: int, height: int, size: int, per_char: float,
+                      margin_v: int, scale: float) -> str:
+    """一条字幕的半透明圆角底条（Layer -1，垫在字下面）。
+
+    浅色画面（落地窗/白墙）上白字看不清，是空房素材的常态。
+    底条按字数算宽，居中垫在字幕正后方；圆角取字号的三成，钝一点不扎眼。
+    单独一条 Dialogue 而不是给 Cap 换 BorderStyle=3：那样逐字弹出时
+    还没显形的字也会先画出自己的框，观感是「空盒子排队」，没法看。
+    """
+    pad_x = int(size * 0.22)
+    box_w = max(int(len(piece) * per_char) + 2 * pad_x, int(size * 1.2))
+    box_h = int(size * 1.42)
+    cy = height - margin_v - int(size * 0.55)
+    body = (
+        f"{{\\an5\\pos({width // 2},{cy})\\1c&H000000&\\1a&H5A&\\p1}}"
+        f"{_rounded_box(box_w, box_h, int(size * 0.3))}{{\\p0}}"
+    )
+    return f"Dialogue: -1,{_ass_time(seg_start)},{_ass_time(seg_end)},Cap,,0,0,0,,{body}"
+
+
+def _progress_line(total: float, width: int, height: int, scale: float) -> str:
+    r"""底部细进度条：一条白线随片长从 0 长到满宽。
+
+    分段画静态矩形（每 0.25 秒一条），不是 \\clip 动画——实测这个
+    libass 版本不插值动画裁剪框，起点会一直停在原地，单条动画画不出来。
+    分段每步只长几像素，观感同样是匀速推进。
+    观众看得到「还剩多少」，下意识就想看完——平台自带的进度条在发布端
+    会被 UI 盖掉一段，自己烧一条细的更保险。粗细随画布缩放。
+    """
+    bar_h = max(4, int(round(6 * scale)))
+    y0 = height - max(3, int(round(4 * scale))) - bar_h
+    y1 = y0 + bar_h
+    steps = max(int(round(total / 0.25)), 1)
+    tick = total / steps          # 每格铺满自己的时间片，首尾相接不闪
+    lines = []
+    for index in range(steps):
+        bar_w = max(1, int(round(width * (index + 1) / steps)))
+        start = index * tick
+        end = total if index == steps - 1 else (index + 1) * tick
+        body = (
+            f"{{\\an7\\pos(0,0)\\1c&H00FFFFFF&\\1a&H50&\\p1}}"
+            f"m 0 {y0} l {bar_w} {y0} l {bar_w} {y1} l 0 {y1}{{\\p0}}"
+        )
+        lines.append(f"Dialogue: 1,{_ass_time(start)},{_ass_time(end)},Cap,,0,0,0,,{body}")
+    return "\n".join(lines)
+
+
 # ------------------------------------------------------------------ 字幕分段
 #
 # 一条字幕铺满屏幕两行是最难看的：字号得缩、还得上下跳。中介刷到的爆款
@@ -496,6 +599,11 @@ def build_ass(
     margin_v: int = CAPTION_MARGIN_V,
     highlight: bool = True,
     highlight_regex: bool = True,
+    pop: bool = True,
+    box: bool = True,
+    progress: bool = True,
+    hook_card: dict | None = None,
+    cta_card: dict | None = None,
 ) -> str:
     """把分镜写成一份 ASS 字幕文件。
 
@@ -505,6 +613,9 @@ def build_ass(
     size 以 1080 宽为基准，16:9 会按画布宽度等比放大；单行字数由字号反算，
     字号调大就自动少放几个字，不会出血。
     highlight=False 时全部白字（有人不喜欢变色）。
+    hook_card：开场房源大字卡，{"title": "800平", "sub": "D19 · 903"}，
+    随第一句从画面外滑入居中——前 3 秒是留人窗口，面积房号是钩子的实物证据。
+    cta_card：结尾邀约卡，{"title", "sub", "start", "end"}，末句说完全屏淡入。
     """
     width, height = canvas
     scale = width / 1080
@@ -515,6 +626,9 @@ def build_ass(
     max_chars = max(5, int((width - 2 * side) / per_char))
     border = max(3, int(round(CAPTION_BORDER * scale)))
     label_size = int(round(LABEL_SIZE * scale))
+    card_size = int(round(CAPTION_SIZE * 1.3 * scale))
+    card_sub_size = int(round(card_size * 0.55))
+    card_border = max(4, int(round(CAPTION_BORDER * 1.2 * scale)))
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {width}
@@ -526,6 +640,7 @@ ScaledBorderAndShadow: yes
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Cap,{font_name},{size},&H00FFFFFF,&H000000FF,&H00000000,&H78000000,-1,0,0,0,100,100,1,0,1,{border},3,2,{side},{side},{margin_v},1
 Style: Label,{font_name},{label_size},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,1,0,1,5,4,7,{LABEL_X},{LABEL_X},{LABEL_Y},1
+Style: Card,{font_name},{card_size},&H00FFFFFF,&H000000FF,&H00000000,&H50000000,-1,0,0,0,100,100,1,0,1,{card_border},6,5,0,0,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -549,6 +664,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             for (piece, _weight), (seg_start, seg_end) in zip(
                 segments, segment_times(start, speech_end, [w for _, w in segments])
             ):
+                if box:
+                    lines.append(
+                        _caption_box_line(piece, seg_start, seg_end,
+                                          width, height, size, per_char, margin_v, scale)
+                    )
                 body = (
                     _highlight(
                         piece,
@@ -557,6 +677,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     )
                     if highlight else _ass_text(piece)
                 )
+                if pop:
+                    body = _typewriter(body, seg_start, seg_end)
                 lines.append(
                     f"Dialogue: 0,{_ass_time(seg_start)},{_ass_time(seg_end)},Cap,,0,0,0,,{body}"
                 )
@@ -566,6 +688,45 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             sub = _ass_text(label.get("sub") or "")
             body = f"{title}\\N{sub}" if sub else title
             lines.append(f"Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Label,,0,0,0,,{body}")
+
+    # 进度条：从片头走到片尾（末句之后还有定格，卡/字幕的 end 里最大值就是片长）
+    if progress and sentences:
+        film_end = max(float(s["end"]) for s in sentences)
+        if cta_card and cta_card.get("end"):
+            film_end = max(film_end, float(cta_card["end"]))
+        if film_end > 1.0:
+            lines.append(_progress_line(film_end, width, height, scale))
+
+    # 开场房源卡：第一句窗口内从左侧滑入居中，钩子说完淡出。
+    # 位置取画面上三分之一（竖屏 0.32）：角标在右上、字幕在底部，互不打架。
+    # 最长挂 3.2 秒：钩子卡是「前 3 秒」的东西，挂满一整个长句会跟角标、
+    # 花字挤在一起，也不符合观众「开头看重点、后面听内容」的节奏。
+    if hook_card and hook_card.get("title") and sentences:
+        first = sentences[0]
+        card_end = min(float(first["end"]), float(first["start"]) + HOOK_CARD_MAX)
+        card_y = int(height * (0.32 if height >= width else 0.30))
+        slide_in = 420
+        enter_x = -int(width * 0.45)
+        title = _ass_text(hook_card["title"])
+        sub = _ass_text(hook_card.get("sub") or "")
+        body = f"{{\\an5\\move({enter_x},{card_y},{width // 2},{card_y},0,{slide_in})\\fad(120,300)}}{title}"
+        if sub:
+            body += f"\\N{{\\fs{card_sub_size}}}{sub}"
+        lines.append(
+            f"Dialogue: 0,{_ass_time(float(first['start']))},{_ass_time(card_end)},Card,,0,0,0,,{body}"
+        )
+
+    # 结尾邀约卡：末句说完淡入，定格期间全屏挂着，片尾自然收口。
+    if cta_card and cta_card.get("title"):
+        cta_start = float(cta_card.get("start") or 0)
+        cta_end = float(cta_card.get("end") or 0)
+        if cta_end > cta_start:
+            title = _ass_text(cta_card["title"])
+            sub = _ass_text(cta_card.get("sub") or "")
+            body = f"{{\\an5\\pos({width // 2},{int(height * 0.42)})\\fad(350,0)}}{title}"
+            if sub:
+                body += f"\\N{{\\fs{card_sub_size}}}{sub}"
+            lines.append(f"Dialogue: 0,{_ass_time(cta_start)},{_ass_time(cta_end)},Card,,0,0,0,,{body}")
     return header + "\n".join(lines) + "\n"
 
 
@@ -585,7 +746,11 @@ def _zoom_filter(item: dict, index: int, fps: int, canvas: tuple[int, int] = (CA
     duration = max(float(item.get("render_span") or (item["end"] - item["start"])), 0.5)
     frames = max(int(duration * fps), 8)
     step = ZOOM_IN / frames
-    if index % 2 == 0:
+    if index == 0:
+        # 钩子镜头：sqrt 是先快后缓的 ease-out——开头 0.5 秒冲到位一大半，
+        # 后面慢慢收。观众的注意力在前 3 秒定去留，开场运镜得比正文急一拍。
+        zoom_expr = f"min(1+{ZOOM_IN}*sqrt(on/{frames}),1.12)"
+    elif index % 2 == 0:
         zoom_expr = f"min(1+{step:.5f}*on,1.12)"
     else:
         zoom_expr = f"max(1.12-{step:.5f}*on,1.0)"
@@ -833,7 +998,12 @@ def render_storyboard(
     caption_bottom: int = CAPTION_MARGIN_V,
     caption_highlight: bool = True,
     caption_highlight_regex: bool = True,
+    caption_pop: bool = True,
+    caption_box: bool = True,
+    caption_progress: bool = True,
     end_hold: float = END_HOLD,
+    hook_card: dict | None = None,
+    cta_card: dict | None = None,
 ) -> Path:
     """把 storyboard 渲染成片。storyboard 每项：
 
@@ -1013,6 +1183,17 @@ def render_storyboard(
             sentences, canvas, font_family,
             size=caption_size, margin_v=caption_bottom,
             highlight=caption_highlight, highlight_regex=caption_highlight_regex,
+            pop=caption_pop,
+            box=caption_box,
+            progress=caption_progress,
+            hook_card=hook_card,
+            # 邀约卡只在末句说完后挂：淡入点落在口播收尾前 0.4 秒，
+            # 定格期间全屏显示。没有口播（纯原声）就不叠——没说带看，卡片是哑的
+            cta_card=(
+                {**cta_card, "start": max(0.0, round(cursor - 0.4, 2)), "end": total}
+                if cta_card and cta_card.get("title") and want_voice
+                else None
+            ),
         ),
         encoding="utf-8",
     )
@@ -1333,10 +1514,45 @@ def _local_audio_visual_settings(task_key: str, task_row=None) -> dict:
         "highlight_source": source if source in {"ai", "rules", "manual"} else "ai",
         "kenburns": _flag(settings, "render_kenburns"),
         "xfade": _flag(settings, "render_xfade"),
+        "caption_pop": _flag(settings, "render_caption_pop"),
+        "caption_box": _flag(settings, "render_caption_box"),
+        "caption_progress": _flag(settings, "render_progress"),
         "tts_rate": _task_value(task_row, "tts_rate") or str(settings.get("render_tts_rate") or "").strip(),
         # 正则兜底：只有「手动【】」不需要
         "caption_highlight_regex": source != "manual",
     }
+
+
+def _property_cards(task_row) -> tuple[dict | None, dict | None]:
+    """从任务关联的房源行拼开场卡和结尾卡的文字。查不到房源返回 (None, None)。
+
+    只写房源表里的事实：面积、楼栋、房号。「整层」「拎包」这类说法不往卡上放——
+    卡是全屏大字，说错话比不说更显眼。
+    """
+    from .db import connect
+
+    try:
+        property_id = task_row["property_id"]
+    except (IndexError, KeyError):
+        return None, None
+    if not property_id:
+        return None, None
+    row = connect().execute(
+        "SELECT building_norm, room_norm, area_sqm FROM properties WHERE id=?",
+        (property_id,),
+    ).fetchone()
+    if row is None:
+        return None, None
+    area = row["area_sqm"]
+    building = (row["building_norm"] or "").strip()
+    room = (row["room_norm"] or "").strip()
+    if not area or not (building or room):
+        return None, None
+    area_text = f"{int(area)}平" if float(area) == int(area) else f"{float(area):g}平"
+    where = " · ".join(x for x in (building, room) if x)
+    hook_card = {"title": area_text, "sub": where}
+    cta_card = {"title": f"{area_text} · {where}", "sub": "带看随时约 · 评论区留言"}
+    return hook_card, cta_card
 
 
 def render_task_locally(task_row) -> Path:
@@ -1387,6 +1603,9 @@ def render_task_locally(task_row) -> Path:
 
     out_dir = EXPORT_DIR / str(task_row["task_no"])
     out = out_dir / "local.mp4"
+    # 开场卡 / 结尾卡的内容全从房源表来，只写事实：面积 + 楼栋房号。
+    # 表里没有这行房源就两张卡都不出，不拿文案里的数字冒充
+    hook_card, cta_card = _property_cards(task_row)
     # target_duration = 0 表示「根据原素材」：用素材视频流的真实长度当目标
     goal = float(task_row["target_duration"] or 0)
     if goal <= 0:
@@ -1416,6 +1635,11 @@ def render_task_locally(task_row) -> Path:
         caption_highlight_regex=visual["caption_highlight_regex"],
         kenburns=visual["kenburns"],
         xfade=visual["xfade"],
+        caption_pop=visual["caption_pop"],
+        caption_box=visual["caption_box"],
+        caption_progress=visual["caption_progress"],
+        hook_card=hook_card,
+        cta_card=cta_card,
     )
     logger.info("本地出片完成：%s（原声=%s，%.1fs）", out, audio_mode, time.time() - started)
 
