@@ -192,3 +192,16 @@ def test_partition_reads_as_spoken_chinese():
 
     ctx = hooks.context({"面积": "220平", "格局": "3隔"})
     assert ctx["partition"] == "3个隔间"
+
+
+def test_titles_never_promise_furniture_or_fitout():
+    """标题也是发出去的，一样不能承诺家具和精装。
+
+    回归用：抖音标题里有「{area}平带全套家具」，小红书有
+    「家具全带，拎包就开工」和「{area}平精装」——这业务既不配家具
+    也没有统一装修，标题比正文更容易被截图投诉。
+    """
+    titles = build_titles(FACTS)
+    text = "".join(titles["douyin"] + titles["xiaohongshu"])
+    for word in ("家具", "拎包", "精装", "配齐"):
+        assert word not in text, text

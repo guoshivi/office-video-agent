@@ -389,15 +389,16 @@ def build_titles(facts: dict, audience: str = "any") -> dict[str, list[str]]:
         fmt("{region}{area}平办公室，{monthly}一个月"),
         fmt("{area}平{partition}，一天{daily}元，老板来算笔账"),
         fmt("在{region}找{area}平的看过来，{monthly}能拿下"),
-        fmt("{area}平带全套家具，月租{monthly}"),
+        fmt("{area}平整层现房，月租{monthly}"),
         fmt("{region}办公室出租，{area}平，{monthly}"),
         # 租金缺失或算不出来时的兜底：标题不能空着
         fmt("{region}{area}平办公室，{partition}"),
         fmt("{area}平，这个格局搬进来就能开工"),
     ]
     xhs = [
-        fmt("{region}看房｜{area}平精装{partition}"),
-        fmt("{area}平｜家具全带，拎包就开工"),
+        # 标题也会发出去，一样不能承诺家具和装修：这业务不配家具、也不做定制
+        fmt("{region}看房｜{area}平{partition}"),
+        fmt("{area}平｜空场交付，随时能进场"),
         fmt("找办公室｜{region}{area}平，一天{daily}元"),
         fmt("月租{monthly}｜{area}平，够{seats}个工位"),
         fmt("找办公室先看这间｜{region}{area}平"),
