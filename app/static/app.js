@@ -1654,6 +1654,26 @@ $("#feishu-restart").addEventListener("click", async () => {
   finally { button.textContent = "重连长连接"; button.disabled = false; }
 });
 
+$("#copy-diagnose").addEventListener("click", async () => {
+  // 不懂电脑的人描述不清现象（"它不动了"），懂的人问不出关键信息。
+  // 与其来回三趟，不如一键把体检结果+平台状态+最近报错复制成一段话。
+  const button = $("#copy-diagnose");
+  button.disabled = true;
+  button.textContent = "正在整理…";
+  try {
+    const result = await api("/api/ready/diagnose");
+    const text = result.text || "";
+    try {
+      await navigator.clipboard.writeText(text);
+      toast("诊断信息已复制，粘贴发出去就行");
+    } catch {
+      // 老系统/非 https 环境没有剪贴板权限，退回弹一条能手动复制的提示
+      toast("复制不了，手动抄这段：" + text.slice(0, 100));
+    }
+  } catch (error) { toast(error.message, true); }
+  finally { button.textContent = "复制诊断信息"; button.disabled = false; }
+});
+
 $("#bitable-push").addEventListener("click", async () => {
   const button = $("#bitable-push");
   button.disabled = true;
