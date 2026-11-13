@@ -1,12 +1,15 @@
 """本地拆解参考视频：不联网、不调云端模型，把一条片子读成可复用的模板。
 
-拆解要同时看四件事：
+拆解看三件事：
 
 1. **节奏** —— ffmpeg 的场景变化找出切点，算出平均镜头长度；
-2. **口播** —— faster-whisper 在本地转写，拿到逐句文案与时间；
-3. **字幕** —— 剪映导出的片子字幕烧在画面里，用 OCR 按帧读，
+   一镜到底的片子没有切点，按时间等分出占位段落（标 synthetic）交给人工划段；
+2. **字幕** —— 剪映导出的片子字幕烧在画面里，用 OCR 按帧读，
    顺带把「顶部功能区角标」和「底部口播字幕」分开（位置差得很远，很好分）；
-4. **结构** —— 按句子角色（钩子 / 面积 / 亮点 / 收尾）归类，算出每段占多少时长。
+3. **结构** —— 按句子角色（钩子 / 面积 / 亮点 / 收尾）归类，算出每段占多少时长。
+
+**口播是可选件**：`transcribe()` 还留着，但自拍素材是空镜（旁白后期配），
+装语音模型是空转。只在拆「别人的、没有字幕、但有真人说话」的片子时才用得上。
 
 产出的 spec 和云端拆解保持同一套字段，上层套用时不用区分来源。
 """
@@ -226,6 +229,25 @@ def _merge_close(bounds: list[float], min_seconds: float = 0.6) -> list[float]:
         if not merged or value - merged[-1] >= min_seconds:
             merged.append(value)
     return merged
+
+
+def audio_mean_db(path: Path) -> float | None:
+    """音轨的平均电平（dBFS），用来判断这条片子有没有人声。
+
+    不分辨人声和背景音乐——那要频谱模型，不值当。只报数字让人自己判断：
+    空镜实拍素材通常在 -40 以下，正常说话在 -25 以上，纯 BGM 介于中间。
+    """
+    ffmpeg = _find_binary("ffmpeg")
+    if not ffmpeg:
+        return None
+    completed = subprocess.run(
+        [ffmpeg, "-hide_banner", "-i", _windows_path(path), "-af", "volumedetect", "-f", "null", "-"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    match = re.search(r"mean_volume:\s*(-?\d+(?:\.\d+)?) dB", completed.stderr or "")
+    return float(match.group(1)) if match else None
 
 
 def _shots_from_cuts(duration: float, cuts: list[float]) -> list[dict]:
@@ -469,7 +491,16 @@ def analyze_file(path: Path) -> dict:
         except AsrError as error:
             warnings.append(f"口播转写失败：{error}｜这次只拆画面节奏")
     else:
-        warnings.append("本机没装语音模型，这次只拆画面节奏；想要逐句台词，见设置里的语音模型说明")
+        # 别一上来就说"你没装模型"：中介自己拍的素材本来就是空镜，
+        # 旁白是后期配的，从来没有真人说话这回事，报缺件只会让人以为哪坏了
+        level = audio_mean_db(path)
+        if level is not None and level < -35:
+            warnings.append(
+                f"这条片子音轨基本是静音（平均 {level:.0f}dB），本来就没有口播；"
+                "空镜素材走「脚本生成文案 → 配音」这条路，不需要听人说话"
+            )
+        else:
+            warnings.append("本机没装语音模型，这次只拆画面节奏；想要逐句台词，见设置里的语音模型说明")
 
     labels: list[dict] = []
     if caps["caption_ocr_ready"]:

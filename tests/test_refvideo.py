@@ -113,3 +113,121 @@ def test_fallback_search_without_vectors(monkeypatch, tmp_path):
     results = library._fallback_search("工区 入户", limit=3)
     assert results and results[0]["template_id"] == "tpl_1"
     assert Path(tmp_path, "ova.db").exists() or True
+
+
+def test_audio_mean_db_parses_volumedetect(monkeypatch):
+    """音量检测用来判断"这条片子本来就没口播"，别把空镜素材报成缺件。"""
+    from app import refvideo
+
+    class Done:
+        stderr = "[Parsed_volumedetect_0] mean_volume: -43.9 dB\nmax_volume: -26.6 dB"
+
+    monkeypatch.setattr(refvideo, "_find_binary", lambda name: "ffmpeg")
+    monkeypatch.setattr(refvideo.subprocess, "run", lambda *a, **k: Done())
+    assert refvideo.audio_mean_db(Path("x.mp4")) == -43.9
+
+
+def test_audio_mean_db_returns_none_without_ffmpeg(monkeypatch):
+    from app import refvideo
+
+    monkeypatch.setattr(refvideo, "_find_binary", lambda name: None)
+    assert refvideo.audio_mean_db(Path("x.mp4")) is None
+
+
+def test_silent_clip_warning_says_no_voiceover(monkeypatch, tmp_path):
+    """静音片子不该弹"本机没装语音模型"，那会让人以为哪坏了。"""
+    from app import refvideo
+
+    fake = tmp_path / "x.mp4"
+    fake.write_bytes(b"stub")
+
+    monkeypatch.setattr(
+        refvideo, "probe_capabilities",
+        lambda: {"speech_ready": False, "caption_ocr_ready": False},
+    )
+    monkeypatch.setattr(refvideo, "probe_duration", lambda path: 10.6)
+    monkeypatch.setattr(refvideo, "scene_cuts", lambda path: [])
+    monkeypatch.setattr(refvideo, "audio_mean_db", lambda path: -43.9)
+
+    spec = refvideo.analyze_file(fake)
+    text = " ".join(spec["warnings"])
+    assert "本来就没有口播" in text
+    assert "没装语音模型" not in text
+
+
+def test_loud_clip_still_mentions_missing_model(monkeypatch, tmp_path):
+    """真有声音的片子才提模型，否则用户不知道该不该装。"""
+    from app import refvideo
+
+    fake = tmp_path / "x.mp4"
+    fake.write_bytes(b"stub")
+
+    monkeypatch.setattr(
+        refvideo, "probe_capabilities",
+        lambda: {"speech_ready": False, "caption_ocr_ready": False},
+    )
+    monkeypatch.setattr(refvideo, "probe_duration", lambda path: 30.0)
+    monkeypatch.setattr(refvideo, "scene_cuts", lambda path: [8.0, 16.0])
+    monkeypatch.setattr(refvideo, "audio_mean_db", lambda path: -18.0)
+
+    spec = refvideo.analyze_file(fake)
+    assert "没装语音模型" in " ".join(spec["warnings"])
+
+
+def test_audio_mean_db_parses_volumedetect(monkeypatch):
+    """音量检测用来判断"这条片子本来就没口播"，别把空镜素材报成缺件。"""
+    from app import refvideo
+
+    class Done:
+        stderr = "[Parsed_volumedetect_0] mean_volume: -43.9 dB\nmax_volume: -26.6 dB"
+
+    monkeypatch.setattr(refvideo, "_find_binary", lambda name: "ffmpeg")
+    monkeypatch.setattr(refvideo.subprocess, "run", lambda *a, **k: Done())
+    assert refvideo.audio_mean_db(Path("x.mp4")) == -43.9
+
+
+def test_audio_mean_db_returns_none_without_ffmpeg(monkeypatch):
+    from app import refvideo
+
+    monkeypatch.setattr(refvideo, "_find_binary", lambda name: None)
+    assert refvideo.audio_mean_db(Path("x.mp4")) is None
+
+
+def test_silent_clip_warning_says_no_voiceover(monkeypatch, tmp_path):
+    """静音片子不该弹"本机没装语音模型"，那会让人以为哪坏了。"""
+    from app import refvideo
+
+    fake = tmp_path / "x.mp4"
+    fake.write_bytes(b"stub")
+
+    monkeypatch.setattr(
+        refvideo, "probe_capabilities",
+        lambda: {"speech_ready": False, "caption_ocr_ready": False},
+    )
+    monkeypatch.setattr(refvideo, "probe_duration", lambda path: 10.6)
+    monkeypatch.setattr(refvideo, "scene_cuts", lambda path: [])
+    monkeypatch.setattr(refvideo, "audio_mean_db", lambda path: -43.9)
+
+    spec = refvideo.analyze_file(fake)
+    text = " ".join(spec["warnings"])
+    assert "本来就没有口播" in text
+    assert "没装语音模型" not in text
+
+
+def test_loud_clip_still_mentions_missing_model(monkeypatch, tmp_path):
+    """真有声音的片子才提模型，否则用户不知道该不该装。"""
+    from app import refvideo
+
+    fake = tmp_path / "x.mp4"
+    fake.write_bytes(b"stub")
+
+    monkeypatch.setattr(
+        refvideo, "probe_capabilities",
+        lambda: {"speech_ready": False, "caption_ocr_ready": False},
+    )
+    monkeypatch.setattr(refvideo, "probe_duration", lambda path: 30.0)
+    monkeypatch.setattr(refvideo, "scene_cuts", lambda path: [8.0, 16.0])
+    monkeypatch.setattr(refvideo, "audio_mean_db", lambda path: -18.0)
+
+    spec = refvideo.analyze_file(fake)
+    assert "没装语音模型" in " ".join(spec["warnings"])
