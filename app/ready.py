@@ -106,23 +106,25 @@ def _wait_port(port: int, seconds: float = 20.0) -> bool:
 def _find_browser() -> tuple[str, str]:
     """找到能挂调试端口的浏览器，返回 (路径, 名字)，找不到就是 ("", "")。
 
-    先 Chrome 再 Edge。Edge 是 Windows 10/11 自带的 Chromium，同样能开
-    远程调试端口——为了发布先去装 Chrome，等于在不需要的地方设门槛。
+    Edge 优先：Windows 10/11 自带，装机率最高，不用先让人装东西。
+    Chrome 兜底：有些机器（或精简版系统）Edge 被卸了，Chrome 反而在。
+    两者都是 Chromium，调试端口和上传页 DOM 完全一样，谁先谁后不影响功能；
+    启动参数里都带 --no-first-run，Edge 首次启动的引导页也不会挡路。
     """
     override = os.getenv("CHROME_PATH", "").strip()
     if override and Path(override).is_file():
         return override, "Chrome"
 
     candidates = (
-        ("Chrome", (
-            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-            r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe",
-        )),
         ("Edge", (
             r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
             r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
             r"%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe",
+        )),
+        ("Chrome", (
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe",
         )),
     )
     for label, paths in candidates:
