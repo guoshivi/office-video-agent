@@ -241,9 +241,14 @@ def _task_value(task, key: str) -> str:
 
 
 def _render_settings(task: dict, safe_mode: bool = False) -> dict:
+    from . import tts
+
     width, height = (1080, 1920) if task["aspect_ratio"] == "9:16" else (1920, 1080)
-    # 男声预设都叫 male_*：按前缀判，别一个个枚举，加新音色不用改这里
-    speaker = "Eric" if str(task["voice"] or "").startswith("male") else "Serena"
+    # 男声预设都叫 male_*：按前缀判；豆包键（doubao_*）看兜底键是不是 male 开头
+    voice_key = str(task["voice"] or "").strip().lower()
+    entry = tts.DOUBAO_VOICES.get(voice_key)
+    edge_key = entry[2] if entry else voice_key
+    speaker = "Eric" if edge_key.startswith("male") else "Serena"
     settings = get_settings()
     try:
         gap = float(settings.get("render_sentence_gap") or 0.22)

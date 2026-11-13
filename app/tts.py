@@ -176,6 +176,21 @@ EDGE_VOICES = {
     "male_professional": "zh-CN-YunjianNeural",
 }
 
+# 豆包 2.0 里实测出声、适合房源口播的音色。key 直接进页面下拉：
+# 选它，配了凭据就用豆包原音色；没配或调用失败，落到同性别最近的
+# 免费音色——片子照出，只是差点自然感。第三项是 edge 兜底键。
+DOUBAO_VOICES = {
+    "doubao_xiaohe": ("zh_female_xiaohe_uranus_bigtts", "小何", "female_warm"),
+    "doubao_cancan": ("zh_female_cancan_uranus_bigtts", "知性灿灿", "female_warm"),
+    "doubao_sisi": ("zh_female_shuangkuaisisi_uranus_bigtts", "爽快思思", "female_lively"),
+    "doubao_vv": ("zh_female_vv_uranus_bigtts", "Vivi", "female_warm"),
+    "doubao_liufei": ("zh_male_liufei_uranus_bigtts", "刘飞", "male_professional"),
+    "doubao_yunzhou": ("zh_male_m191_uranus_bigtts", "云舟", "male_anchor"),
+    "doubao_ruya": ("zh_male_ruyaqingnian_uranus_bigtts", "儒雅青年", "male_warm"),
+}
+for _key, (_voice_id, _label, _edge_key) in DOUBAO_VOICES.items():
+    EDGE_VOICES[_key] = EDGE_VOICES[_edge_key]
+
 
 class TTSError(RuntimeError):
     pass
@@ -219,12 +234,17 @@ def config() -> dict:
 
 
 def voice_for(voice_key: str, conf: dict | None = None) -> str:
-    """把 female_warm / male_professional 映射成火山的音色 id，没有就返回空。
+    """把页面「声音」键映射成火山的音色 id，没有就返回空。
+
+    两条路：doubao_* 键直接查 DOUBAO_VOICES 的固定 id；女/男预设
+    （female_warm、male_professional…）用设置页里填的音色 id。
 
     注意别写成 `"male" in key`：female 里也有 male，女声会被判成男声。
     """
     conf = conf or config()
     key = str(voice_key or "").strip().lower()
+    if key in DOUBAO_VOICES:
+        return DOUBAO_VOICES[key][0]
     is_male = key.startswith("male") or key == "m"
     return conf["voice_male"] if is_male else conf["voice_female"]
 

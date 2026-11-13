@@ -1171,6 +1171,10 @@ _VOICE_MAP = {
     "male_anchor": (tts.EDGE_VOICES["male_anchor"], "+10%"),
     "male_professional": (tts.EDGE_VOICES["male_professional"], "+6%"),
 }
+# 豆包音色键继承各自 edge 兜底预设的语速：豆包的声音本身节奏自然，
+# 语速照预设走；没配凭据退回 edge 时也和原来选免费预设一个听感。
+for _key, (_voice_id, _label, _edge_key) in tts.DOUBAO_VOICES.items():
+    _VOICE_MAP[_key] = _VOICE_MAP[_edge_key]
 
 
 def _script_to_storyboard(script: str) -> list[dict]:
