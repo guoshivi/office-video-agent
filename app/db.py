@@ -238,7 +238,7 @@ DEFAULT_SETTINGS = {
     "public_contact": "欢迎私信咨询房源详情和看房安排",
     "default_duration": "45",
     "default_aspect_ratio": "9:16",
-    "default_voice": "female_warm",
+    "default_voice": "doubao_xiaohe",
     "workbench_path": "",
     "workbench_url": os.getenv("WORKBENCH_URL", ""),
     "workbench_output_root": os.getenv(
@@ -389,6 +389,25 @@ def init_db() -> None:
                 "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
                 (key, value),
             )
+        _migrate_default_voice_to_doubao(connection)
+
+
+def _migrate_default_voice_to_doubao(connection) -> None:
+    """把还停在免费音色的默认值换成豆包小何，只做一次。
+
+    免费音色实测"少了点自然感"，接上火山之后新单子应该默认就用真人的。
+    老库里的值已经写死了，光改默认值不动历史数据，所以在这里补一刀；
+    用标记位兜住，免得以后有人主动改回免费又被悄悄换掉。
+    """
+    marker = "migration_default_voice_doubao"
+    if connection.execute("SELECT 1 FROM settings WHERE key=?", (marker,)).fetchone():
+        return
+    row = connection.execute("SELECT value FROM settings WHERE key='default_voice'").fetchone()
+    if row and str(row["value"] or "").strip() == "female_warm":
+        connection.execute(
+            "UPDATE settings SET value='doubao_xiaohe' WHERE key='default_voice'"
+        )
+    connection.execute("INSERT OR REPLACE INTO settings(key, value) VALUES (?, '1')", (marker,))
 
 
 def get_settings() -> dict[str, str]:

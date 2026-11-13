@@ -364,12 +364,35 @@ async function runPropertySearch() {
   renderProperties(data.items, data.total, "没有语义匹配的房源");
 }
 
-function fillPropertyOptions(items = state.propertyOptions.length ? state.propertyOptions : state.properties) {
+function fillPropertyOptions(items) {
+  // 房源库几百上千条，全塞进一个原生下拉等于让人用滚轮翻书。
+  // 这里留一份全量，上面那个搜索框按关键词重画选项。
+  if (items) state.propertyOptions = items;
+  renderPropertyOptions();
+}
+
+function renderPropertyOptions() {
   const select = $("#task-property");
+  const keyword = ($("#task-property-search")?.value || "").trim().toLowerCase();
+  const all = state.propertyOptions && state.propertyOptions.length ? state.propertyOptions : state.properties || [];
+  const matched = keyword
+    ? all.filter((item) =>
+        [item.region, item.building, item.room, item.area]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+          .includes(keyword),
+      )
+    : all;
   const previous = select.value;
-  select.innerHTML = items.length
-    ? '<option value="">请选择要绑定的房源</option>' + items.map((item) => `<option value="${item.id}">${escapeHtml([item.region, item.building, item.room, item.area].filter(Boolean).join(" · "))}${item.status === "needs_review" ? "（待确认）" : ""}</option>`).join("")
-    : '<option value="">请先导入房源</option>';
+  select.innerHTML = matched.length
+    ? '<option value="">请选择要绑定的房源</option>' +
+      matched
+        .map((item) => `<option value="${item.id}">${escapeHtml([item.region, item.building, item.room, item.area].filter(Boolean).join(" · "))}${item.status === "needs_review" ? "（待确认）" : ""}</option>`)
+        .join("")
+    : keyword
+      ? `<option value="">没找到「${escapeHtml(keyword)}」的房源，换个房号试试</option>`
+      : '<option value="">请先导入房源</option>';
   select.value = previous;
 }
 
@@ -861,7 +884,11 @@ async function openNewTask() {
 
 function openAdvancedTask() {
   closeDialog("quick-dialog");
+  // 上次搜的房号别带过来，否则下拉只剩一两条，看起来像房源丢了
+  const search = $("#task-property-search");
+  if (search) search.value = "";
   fillPropertyOptions(state.propertyOptions);
+  applyTaskDefaults();
   resetDurationField();
   // 人群下拉要在弹窗打开时就有选项，不能等点了「出三版」才填
   ensureAudienceOptions().catch(() => {});
@@ -869,9 +896,33 @@ function openAdvancedTask() {
   openDialog("task-dialog");
 }
 
+$("#task-property-search").addEventListener("input", renderPropertyOptions);
+
+// 表单提交后 form.reset() 会把下拉退回 HTML 里的第一个选项，
+// 而「第一个选项」不等于「设置里的默认」。第二次建任务时声音就悄悄变回别的音色了。
+// 每次开新单都把设置值显式写回去。
+function applyTaskDefaults() {
+  const form = $("#task-form");
+  if (!form) return;
+  const settings = state.settings || {};
+  const duration = Number(settings.default_duration);
+  if (form.elements.target_duration) {
+    form.elements.target_duration.value = duration > 0 ? duration : 45;
+  }
+  if (settings.default_aspect_ratio && form.elements.aspect_ratio) {
+    form.elements.aspect_ratio.value = settings.default_aspect_ratio;
+  }
+  if (settings.default_voice && form.elements.voice) {
+    form.elements.voice.value = settings.default_voice;
+  }
+}
+
 // 每次新开一张单，观感项都退回「跟设置」，免得上一单的选择被悄悄带过来
 function resetRenderOptions() {
-  ["subtitle_size", "subtitle_bottom", "tts_rate", "flower"].forEach((name) => {
+  [
+    "subtitle_size", "subtitle_bottom", "tts_rate", "flower",
+    "render_xfade", "render_caption_pop", "render_caption_box", "render_progress",
+  ].forEach((name) => {
     const field = $(`#task-form [name="${name}"]`);
     if (field) field.value = "";
   });
@@ -889,7 +940,11 @@ function renderOptionHints(selector = "#render-defaults-hint") {
   const where = { high: "靠上", middle: "居中", low: "靠下" }[settings.render_subtitle_bottom] || "居中";
   const rate = (settings.render_tts_rate || "").trim() || "默认";
   const flower = String(settings.render_flower ?? "1") === "1" ? "开" : "关";
-  hint.textContent = `当前：${size}字 · ${where} · 语速${rate} · 花字${flower}`;
+  // 折叠着也得让人知道「跟设置」跟的是啥，否则四个新开关等于没有说明
+  const flag = (value) => (String(value ?? "1") === "1" ? "开" : "关");
+  const pop = String(settings.render_caption_pop ?? "1") === "1" ? "逐字" : "整句";
+  const box = String(settings.render_caption_box ?? "1") === "1" ? "有底条" : "无底条";
+  hint.textContent = `当前：${size}字 · ${where} · 语速${rate} · 花字${flower} ｜ 叠化${flag(settings.render_xfade)} · ${pop} · ${box} · 进度条${flag(settings.render_progress)}`;
 }
 
 function renderDetailHints() {
@@ -931,10 +986,18 @@ function quickSummary() {
   const parts = [];
   if (quick.clip) parts.push(`视频已就绪（${humanSize(quick.clip.size)}）`);
   if (quick.chosen) parts.push(`房源：<strong>${escapeHtml(quick.chosen.label)}</strong>`);
+  // 三步走完得让人知道「这条会用哪个声音念」，不满意就点左下角换详细表单
+  const voice = quickVoiceLabel();
   $("#quick-summary").innerHTML = parts.length === 2
-    ? `${parts[0]}，${parts[1]}。点右下角「开始出片」，出完会进审核台等你确认。`
+    ? `${parts[0]}，${parts[1]}。配音「${escapeHtml(voice)}」，点右下角「开始出片」，出完会进审核台等你确认。`
     : "选好视频、确认房源，就可以开始。";
   $("#quick-submit").disabled = !(quick.clip && quick.chosen);
+}
+
+function quickVoiceLabel() {
+  const key = (state.settings || {}).default_voice || "doubao_xiaohe";
+  const option = document.querySelector(`#task-form [name="voice"] option[value="${key}"]`);
+  return option ? option.textContent.replace(/（.*?）/, "").trim() : "默认声音";
 }
 
 /** 上传视频。用 XHR 是为了拿到上传进度——2 GB 的片子没有进度条会让人以为卡死。 */
@@ -1811,6 +1874,15 @@ $("#target-duration").addEventListener("input", () => {
 
 $("#video-input").addEventListener("change", async (event) => {
   const file = event.target.files[0];
+  // 后端上限就是 2 GB。先在这里拦，别让人等上传完了才收到 413
+  if (file && file.size > 2 * 1024 * 1024 * 1024) {
+    const size = (file.size / 1024 / 1024 / 1024).toFixed(2);
+    toast(`这段视频 ${size} GB，超过 2 GB 上限。先剪短或压缩一下再上传`, true);
+    event.target.value = "";
+    $("#video-file-name").textContent = "MP4、MOV、M4V、AVI、MKV，单个不超过 2 GB";
+    renderDurationButton(0);
+    return;
+  }
   $("#video-file-name").textContent = file ? `${file.name} · ${(file.size / 1024 / 1024).toFixed(1)} MB` : "未选择视频";
   if (!file) {
     renderDurationButton(0);
