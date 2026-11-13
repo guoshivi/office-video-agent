@@ -242,7 +242,8 @@ def _task_value(task, key: str) -> str:
 
 def _render_settings(task: dict, safe_mode: bool = False) -> dict:
     width, height = (1080, 1920) if task["aspect_ratio"] == "9:16" else (1920, 1080)
-    speaker = "Eric" if task["voice"] == "male_professional" else "Serena"
+    # 男声预设都叫 male_*：按前缀判，别一个个枚举，加新音色不用改这里
+    speaker = "Eric" if str(task["voice"] or "").startswith("male") else "Serena"
     settings = get_settings()
     try:
         gap = float(settings.get("render_sentence_gap") or 0.22)

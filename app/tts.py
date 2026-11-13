@@ -162,9 +162,14 @@ PROVIDERS = {
 EMOTIONS = ("", "happy", "sad", "angry", "surprised", "fear", "hate", "excited", "coldness", "neutral")
 
 # edge-tts 的兜底音色（免费那档）。语速在渲染层按预设另配，所以这里只管音色名。
+# 标签写在页面下拉里：亲切女声（晓晓）/ 轻快女声（晓伊）/ 阳光男声（云希）
+# / 播音男声（云扬）/ 磁性男声（云健）。
+# 晓夏（卡通风）和两个方言音色没放进来：房源口播要正经，不要喜剧感。
 EDGE_VOICES = {
     "female_warm": "zh-CN-XiaoxiaoNeural",
-    "female_professional": "zh-CN-XiaoxiaoNeural",
+    "female_lively": "zh-CN-XiaoyiNeural",
+    "male_warm": "zh-CN-YunxiNeural",
+    "male_anchor": "zh-CN-YunyangNeural",
     "male_professional": "zh-CN-YunjianNeural",
 }
 

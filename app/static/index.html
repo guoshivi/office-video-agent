@@ -252,7 +252,7 @@
                   <label>默认比例<select name="default_aspect_ratio"><option>9:16</option><option>16:9</option></select></label>
                 </div>
                 <div class="form-row">
-                  <label>默认声音<select name="default_voice"><option value="female_warm">温暖女声</option><option value="male_professional">专业男声</option></select><small>念稿用男声还是女声；用哪家引擎在下面「配音」里定。</small></label>
+                  <label>默认声音<select name="default_voice"><option value="female_warm">亲切女声（晓晓）</option><option value="female_lively">轻快女声（晓伊）</option><option value="male_warm">阳光男声（云希）</option><option value="male_anchor">播音男声（云扬）</option><option value="male_professional">磁性男声（云健）</option></select><small>念稿用哪个声音；想接更接近真人的豆包音色，去下面「配音」填火山凭据。</small></label>
                   <label>默认原声<select name="local_audio_mode">
                     <option value="mix">保留原声（压低垫在口播下）</option>
                     <option value="voice">不要原声（只有口播 + 音乐）</option>
@@ -514,7 +514,7 @@
         <label class="full">实拍视频<input type="file" name="video" id="video-input" accept="video/mp4,video/quicktime,video/x-m4v,video/x-msvideo,video/x-matroska" required><small id="video-file-name">MP4、MOV、M4V、AVI、MKV，单个不超过 2 GB</small></label>
         <div class="form-field">目标时长（秒）<span class="duration-row"><input name="target_duration" id="target-duration" type="number" min="10" max="180" value="45"><button type="button" class="duration-use-source" id="use-source-duration" disabled title="先选视频，再点这里开启「根据原素材」模式">跟原片</button></span></div>
         <label>视频比例<select name="aspect_ratio"><option>9:16</option><option>16:9</option></select></label>
-        <label>声音<select name="voice"><option value="female_warm">温暖女声</option><option value="male_professional">专业男声</option></select></label>
+        <label>声音<select name="voice"><option value="female_warm">亲切女声（晓晓）</option><option value="female_lively">轻快女声（晓伊）</option><option value="male_warm">阳光男声（云希）</option><option value="male_anchor">播音男声（云扬）</option><option value="male_professional">磁性男声（云健）</option></select></label>
         <label>原声<select name="audio_mode">
           <option value="">跟设置里的默认</option>
           <option value="mix">保留原声（压低垫在口播下）</option>

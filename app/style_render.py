@@ -1162,10 +1162,13 @@ DATA_OUT_DIR = BASE_DIR / "data" / "renders"
 
 # ------------------------------------------------------------------ 任务本地出片
 
-# 任务 voice 选项 → edge-tts 音色
+# 任务 voice 选项 → edge-tts 音色 + 语速。中介口播普遍偏快，慢了反而假；
+# 但晓伊和云希本身语速就快，比晓晓少加一点
 _VOICE_MAP = {
     "female_warm": (tts.EDGE_VOICES["female_warm"], "+10%"),
-    "female_professional": (tts.EDGE_VOICES["female_professional"], "+4%"),
+    "female_lively": (tts.EDGE_VOICES["female_lively"], "+8%"),
+    "male_warm": (tts.EDGE_VOICES["male_warm"], "+8%"),
+    "male_anchor": (tts.EDGE_VOICES["male_anchor"], "+10%"),
     "male_professional": (tts.EDGE_VOICES["male_professional"], "+6%"),
 }
 
