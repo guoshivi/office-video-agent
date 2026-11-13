@@ -56,7 +56,21 @@ SELECT_BUDGET = 120.0
 WEIGHTS = {"sharpness": 0.45, "brightness": 0.30, "color": 0.25}
 
 # 选镜结果的结构变过一次就加一，老缓存自动作废
-CACHE_VERSION = 3
+CACHE_VERSION = 4
+
+# 「几乎是同一帧」的判定线：两段指纹的相关系数超过它才合并。
+# 这个数只用来抓静止机位切出来的假段（画面几乎没动，相关 0.95+），
+# **不用来判断「是不是同一处空间」**——那条路已经试死三次：
+# embedding 0.81~0.87 分不出房间类型，16×16 平均差 35.5 vs 36.3 排在并列，
+# 灰度相关更离谱：同一张桌子的相邻机位只有 0.46，走廊和工位桌反倒 0.71。
+# 判错了会把门口那段当重复删掉，比重复本身更伤。空间多样性交给走位循环。
+SIMILAR = 0.85
+# 画面指纹的边长：16×16 灰度足够分「是不是同一帧」，
+# 再细就变成在比噪点和反光了
+SIG_SIZE = 16
+# 低于这个长度的段，放慢到一句 3~4 秒会被拉长两倍以上，糊成一格静止画面。
+# 有别的段可用就不用它（尾部多半是走位收尾，少一段不影响叙事）。
+MIN_STRETCH_CLIP = 2.0
 
 
 class ShotSelectError(RuntimeError):
@@ -126,6 +140,35 @@ def _score_frames(paths: list[str]) -> tuple[float, float]:
     total = sum(WEIGHTS[key] * means[key] for key in WEIGHTS)
     detail = float(np.mean([frame.get("detail", 0.0) for frame in per_frame]))
     return total, detail
+
+
+def _signature(frame_path: str) -> list[float]:
+    """一张 16×16 的归一化灰度指纹，用来判断两段是不是同一个画面。
+
+    归一化（减均值除标准差）之后，两段的相关系数就是相似度：
+    亮度不同、白平衡偏一点都不会误判，只有构图真像才会高。
+    """
+    if not frame_path:
+        return []
+    try:
+        import cv2
+    except Exception:  # noqa: BLE001 - 没装 OpenCV 就不做去重，别挡出片
+        return []
+    image = cv2.imread(frame_path)
+    if image is None:
+        return []
+    gray = cv2.cvtColor(cv2.resize(image, (SIG_SIZE, SIG_SIZE)), cv2.COLOR_BGR2GRAY)
+    values = gray.astype("float32").reshape(-1)
+    centered = values - float(values.mean())
+    std = float(centered.std()) or 1.0
+    return [round(float(value) / std, 2) for value in centered]
+
+
+def similarity(left: list[float] | None, right: list[float] | None) -> float:
+    """两个指纹的相关系数。缺指纹（老缓存、没装 OpenCV）时返回 0，不拦。"""
+    if not left or not right or len(left) != len(right):
+        return 0.0
+    return sum(a * b for a, b in zip(left, right)) / len(left)
 
 
 # ------------------------------------------------------------------ 文字 / 人物
@@ -318,6 +361,8 @@ def candidate_clips(path: str | Path, *, ocr_top: int = OCR_TOP, prefer_clean: b
             )
 
     for clip in scored:
+        # 指纹只取第一帧：判断「是不是同一个画面」不需要多看几帧
+        clip["sig"] = _signature(clip["_frames"][0] if clip["_frames"] else "")
         clip.pop("_frames", None)
 
     if prefer_clean:
@@ -353,16 +398,65 @@ def _hook_order(chosen: list[dict], hook_first: bool = True) -> list[dict]:
     return chosen[best:] + chosen[:best]
 
 
+def _distinct(clips: list[dict]) -> list[dict]:
+    """合并「几乎是同一帧」的段。
+
+    静止机位、原地转身的素材，切出来的候选段画面几乎没动，彼此轮着用
+    看上去就是卡住了。这种段只留分数最高的一个。**它不负责判「同一处空间」**——
+    全局统计量做不到这件事，硬判只会把真正不同的房间删掉。
+    """
+    kept: list[dict] = []
+    for clip in sorted(clips, key=lambda c: -c["score"]):
+        if any(similarity(clip.get("sig"), item.get("sig")) >= SIMILAR for item in kept):
+            continue
+        kept.append(clip)
+    return kept
+
+
+def _lay_clips(clips: list[dict], needed: int) -> list[tuple[float, float]]:
+    """把选好的段铺成 needed 个镜头：一轮走完，再从起点走一轮。
+
+    以前是「缺哪段补哪段」，出来的顺序是 A、B、A、B——同一面墙三秒一次
+    反复横跳，空间感直接没了。改成走位循环：进门→走廊→房间走完一轮，
+    再从门口走一轮，每轮内部不重复，相邻两镜永远不是同一处。
+    同一段第二次用时把入点往后挪一点，别让观众看到原样重播。
+    """
+    if not clips:
+        return []
+    result: list[tuple[float, float]] = []
+    uses: dict[int, int] = {}
+    while len(result) < needed:
+        for index, clip in enumerate(clips):
+            if len(result) >= needed:
+                break
+            uses[index] = uses.get(index, 0) + 1
+            start, end = float(clip["start"]), float(clip["end"])
+            if uses[index] > 1:
+                room = max(0.0, (end - start) - MIN_CLIP)
+                start = min(end - MIN_CLIP, start + min(0.45 * (uses[index] - 1), room))
+            result.append((round(start, 2), round(end, 2)))
+    # 素材只剩一段时重复躲不开，至少别让它挨着出现
+    for i in range(len(result) - 1):
+        if result[i] != result[i + 1]:
+            continue
+        for j in range(i + 2, len(result)):
+            if result[j] != result[i] and result[j - 1] != result[i]:
+                result[i + 1], result[j] = result[j], result[i + 1]
+                break
+    return result
+
+
 def pick_clips(path: str | Path, needed: int, *, hook_first: bool = True) -> list[tuple[float, float]]:
     """选 needed 个镜头，返回 [(start, end)]。
 
-    规则：blocked 的段垫底；同一段不连用两次；不够就重复用最好的几段，
-    重复时间隔尽量远。
+    规则：带字幕/有人物的段垫底；同一画面只用一次；素材不够就整轮重复，
+    每一轮都从门口走到最里面，不来回横跳。
 
-    hook_first：第一个镜头用画质最高的那段。抖音的流量几乎由前 3 秒决定，
+    hook_first：第一个镜头用信息量最大的那段。抖音的流量几乎由前 3 秒决定，
     开头是一面白墙还是整面落地窗，完播率差一个档。剩下的按拍摄顺序从开场
     镜头往后绕一圈——保持「进门往里走」的空间感，只把最抓人的那一下提到最前。
     """
+    needed = max(1, int(needed))
     clips = candidate_clips(path, ocr_top=max(needed + 4, OCR_TOP))
     good = [c for c in clips if not c["has_text"] and c["seconds"] >= MIN_CLIP]
     backup = [c for c in clips if c["has_text"] and c["seconds"] >= MIN_CLIP]
@@ -371,32 +465,16 @@ def pick_clips(path: str | Path, needed: int, *, hook_first: bool = True) -> lis
         duration = probe_duration(Path(_windows_path(path)))
         return [(0.0, min(duration, 4.0))]
 
-    chosen: list[dict] = []
-    used: dict[int, int] = {}
-    for _index in range(needed):
-        # 每轮挑「用得最少、没穿帮、分数最高」的；blocked 段计数上预支一千次，
-        # 只有干净镜头全用光了才轮得到它们
-        best_index, best_key = 0, None
-        for position, clip in enumerate(pool):
-            times_used = used.get(position, 0) + (1000 if clip["has_text"] else 0)
-            key = (times_used, -clip["score"])
-            if best_key is None or key < best_key:
-                best_index, best_key = position, key
-        chosen.append(pool[best_index])
-        used[best_index] = used.get(best_index, 0) + 1
+    distinct = _distinct(pool)
+    # 去重去到一个不剩说明整条素材都是同一个画面，那就按原样循环（至少还有画面动）
+    if len(distinct) >= 2:
+        pool = distinct
 
-    chosen.sort(key=lambda c: c["start"])
-    chosen = _hook_order(chosen, hook_first)
-    result = [(c["start"], min(c["end"], c["start"] + MAX_CLIP)) for c in chosen]
+    # 太短的段放慢两倍以上就是一格静止画面。有够长的可用就别用它，
+    # 但只剩短段时还得用——没有画面比画面糊更糟。
+    roomy = [c for c in pool if c["seconds"] >= MIN_STRETCH_CLIP]
+    if len(roomy) >= 2:
+        pool = roomy
 
-    # 同一段被用了两次时会相邻出现，插花分散开
-    for i in range(len(result) - 1):
-        if result[i] != result[i + 1]:
-            continue
-        for j in range(i + 2, len(result)):
-            if result[j] != result[i] and result[j - 1] != result[i] and (
-                j + 1 >= len(result) or result[j + 1] != result[i]
-            ):
-                result[i + 1], result[j] = result[j], result[i + 1]
-                break
-    return result
+    ordered = _hook_order(sorted(pool, key=lambda c: c["start"]), hook_first)
+    return _lay_clips(ordered, needed)
